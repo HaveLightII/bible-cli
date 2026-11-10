@@ -407,6 +407,29 @@ class RecoverySource:
         ).fetchall()
 
 
+class CuvSource:
+    def __init__(self, conn):
+        self.conn = conn
+
+    def maxChapter(self, bookIndex):
+        row = self.conn.execute(
+            "SELECT MAX(Chapter) AS m FROM Bible WHERE Book=?", (bookIndex,)
+        ).fetchone()
+        return row["m"] or 1
+
+    def chapterRows(self, bookIndex, chapter):
+        return self.conn.execute(
+            "SELECT Verse, Scripture FROM Bible WHERE Book=? AND Chapter=? ORDER BY Verse",
+            (bookIndex, chapter),
+        ).fetchall()
+
+    def verseRaw(self, bookIndex, chapter, verse):
+        return self.conn.execute(
+            "SELECT Scripture FROM Bible WHERE Book=? AND Chapter=? AND Verse=?",
+            (bookIndex, chapter, verse),
+        ).fetchone()
+
+
 def resolveBook(conn, name):
     return RecoverySource(conn).resolveBook(name)
 
@@ -675,12 +698,7 @@ def cmdOrig(args, _conn):
         sys.exit(1)
 
     bconn = connectStrongBible(args.strongbible)
-    cur = bconn.cursor()
-    rows = cur.execute(
-        "SELECT Verse, Scripture FROM Bible WHERE Book=? AND Chapter=? "
-        "ORDER BY Verse",
-        (bookIndex, chapter),
-    ).fetchall()
+    rows = CuvSource(bconn).chapterRows(bookIndex, chapter)
     if not rows:
         sys.stderr.write("查無此章節\n")
         sys.exit(1)
@@ -1207,12 +1225,8 @@ class App:
             conn = self._openStrongConn()
             if conn is None:
                 return 1
-            row = conn.execute(
-                "SELECT MAX(Chapter) AS m FROM Bible WHERE Book=?", (bookIndex,)
-            ).fetchone()
-        else:
-            return self.source.maxChapter(bookIndex)
-        return row["m"] or 1
+            return CuvSource(conn).maxChapter(bookIndex)
+        return self.source.maxChapter(bookIndex)
 
 
     def _pageStep(self):
@@ -1397,10 +1411,7 @@ class App:
         if conn is None:
             self.statusMessage = "找不到原文 Strong 聖經模組"
             return
-        row = conn.execute(
-            "SELECT Scripture FROM Bible WHERE Book=? AND Chapter=? AND Verse=?",
-            (world.selectedBookIndex, world.selectedChapter, verse),
-        ).fetchone()
+        row = CuvSource(conn).verseRaw(world.selectedBookIndex, world.selectedChapter, verse)
         if not row:
             self.statusMessage = "查無經文內容"
             return
@@ -1418,10 +1429,7 @@ class App:
                 return
             bookName = zhBookNames[bookIndex - 1]
             for s in sections:
-                row = conn.execute(
-                    "SELECT Scripture FROM Bible WHERE Book=? AND Chapter=? AND Verse=?",
-                    (bookIndex, chapter, s),
-                ).fetchone()
+                row = CuvSource(conn).verseRaw(bookIndex, chapter, s)
                 if row:
                     text = strongTagPattern.sub("", row["Scripture"])
                     parts.append(f"{bookName} {chapter}:{s}　{text}")
@@ -1460,10 +1468,7 @@ class App:
                 return row["content"]
         conn = self._openStrongConn()
         if conn is not None:
-            row = conn.execute(
-                "SELECT Scripture FROM Bible WHERE Book=? AND Chapter=? AND Verse=?",
-                (bookIndex, chapter, section),
-            ).fetchone()
+            row = CuvSource(conn).verseRaw(bookIndex, chapter, section)
             if row:
                 return strongTagPattern.sub("", row["Scripture"])
         return ""
@@ -1944,10 +1949,7 @@ class App:
             lines.append(SegLine([("找不到 Strong 原文聖經模組", 0, None)]))
             return lines
 
-        rows = conn.execute(
-            "SELECT Verse, Scripture FROM Bible WHERE Book=? AND Chapter=? ORDER BY Verse",
-            (bookIndex, chapter),
-        ).fetchall()
+        rows = CuvSource(conn).chapterRows(bookIndex, chapter)
         if not rows:
             lines.append(SegLine([("查無此章節", 0, None)]))
             return lines
@@ -3231,10 +3233,7 @@ def _printStrongDefinitionSafe(dictPath, code, color):
 
 
 def _printOrigChapter(bconn, bookIndex, chapter, verseFilter, color):
-    rows = bconn.execute(
-        "SELECT Verse, Scripture FROM Bible WHERE Book=? AND Chapter=? ORDER BY Verse",
-        (bookIndex, chapter),
-    ).fetchall()
+    rows = CuvSource(bconn).chapterRows(bookIndex, chapter)
     if not rows:
         print("查無此章節")
         return None
