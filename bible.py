@@ -319,6 +319,46 @@ class RecoverySource:
         ).fetchall()
         return [(r["book_index"], r["name"]) for r in rows]
 
+    def outlines(self, lang, bookIndex, chapter):
+        cur = self.conn.cursor()
+        rows = cur.execute(
+            "SELECT section, flag, level, outline FROM outline "
+            "WHERE language=? AND book_index=? AND chapter=? "
+            "ORDER BY section ASC, flag ASC, level ASC",
+            (lang, bookIndex, chapter),
+        ).fetchall()
+        bySection = {}
+        for r in rows:
+            bySection.setdefault(r["section"], []).append(r)
+        return bySection
+
+    def footnotes(self, lang, bookIndex, chapter, section):
+        cur = self.conn.cursor()
+        rows = cur.execute(
+            "SELECT location, seq, note FROM footnote "
+            "WHERE language=? AND book_index=? AND chapter=? AND section=? "
+            "ORDER BY seq ASC",
+            (lang, bookIndex, chapter, section),
+        ).fetchall()
+        return rows
+
+    def footnote(self, bookIndex, chapter, section, seq, lang=None):
+        lang = self.lang if lang is None else lang
+        cur = self.conn.cursor()
+        return cur.execute(
+            "SELECT note FROM footnote WHERE language=? AND book_index=? "
+            "AND chapter=? AND section=? AND seq=?",
+            (lang, bookIndex, chapter, section, seq),
+        ).fetchone()
+
+    def intros(self, bookIndex, lang=None):
+        lang = self.lang if lang is None else lang
+        cur = self.conn.cursor()
+        return cur.execute(
+            "SELECT type, intro FROM book_intro WHERE language=? AND book_index=? ORDER BY type",
+            (lang, bookIndex),
+        ).fetchall()
+
 
 def resolveBook(conn, name):
     return RecoverySource(conn).resolveBook(name)
@@ -344,28 +384,11 @@ def insertFootnoteMarkers(content, footnotes, color=True):
 
 
 def getOutlines(conn, lang, bookIndex, chapter):
-    cur = conn.cursor()
-    rows = cur.execute(
-        "SELECT section, flag, level, outline FROM outline "
-        "WHERE language=? AND book_index=? AND chapter=? "
-        "ORDER BY section ASC, flag ASC, level ASC",
-        (lang, bookIndex, chapter),
-    ).fetchall()
-    bySection = {}
-    for r in rows:
-        bySection.setdefault(r["section"], []).append(r)
-    return bySection
+    return RecoverySource(conn).outlines(lang, bookIndex, chapter)
 
 
 def getFootnotes(conn, lang, bookIndex, chapter, section):
-    cur = conn.cursor()
-    rows = cur.execute(
-        "SELECT location, seq, note FROM footnote "
-        "WHERE language=? AND book_index=? AND chapter=? AND section=? "
-        "ORDER BY seq ASC",
-        (lang, bookIndex, chapter, section),
-    ).fetchall()
-    return rows
+    return RecoverySource(conn).footnotes(lang, bookIndex, chapter, section)
 
 
 def connectSqliteOrExit(path, missingPathHint):
@@ -663,11 +686,7 @@ def cmdIntro(args, conn):
         sys.stderr.write(f"找不到書卷: {args.book}\n")
         sys.exit(1)
     name = bookDisplayName(conn, bookIndex, "big5")
-    cur = conn.cursor()
-    rows = cur.execute(
-        "SELECT type, intro FROM book_intro WHERE language='big5' AND book_index=? ORDER BY type",
-        (bookIndex,),
-    ).fetchall()
+    rows = RecoverySource(conn).intros(bookIndex)
     print(f"{bold}{name} 書卷簡介{reset}\n")
     for r in rows:
         label = introTypeLabel.get(r["type"], f"type{r['type']}")
@@ -685,12 +704,7 @@ def cmdNote(args, conn):
     except ValueError:
         sys.stderr.write("章節格式錯誤，需為 章:節，例如 1:1\n")
         sys.exit(1)
-    cur = conn.cursor()
-    row = cur.execute(
-        "SELECT note FROM footnote WHERE language='big5' AND book_index=? "
-        "AND chapter=? AND section=? AND seq=?",
-        (bookIndex, chapter, section, args.seq),
-    ).fetchone()
+    row = RecoverySource(conn).footnote(bookIndex, chapter, section, args.seq)
     if not row:
         sys.stderr.write("查無此註解\n")
         sys.exit(1)
@@ -2493,10 +2507,7 @@ class App:
                 self._setCmdError("目前未選擇書卷")
                 return
         bookName = bookDisplayName(self.conn, bookIndex, "big5")
-        rows = self.conn.execute(
-            "SELECT type, intro FROM book_intro WHERE language='big5' AND book_index=? ORDER BY type",
-            (bookIndex,),
-        ).fetchall()
+        rows = self.source.intros(bookIndex)
         if not rows:
             text = "（查無書卷簡介）"
         else:
