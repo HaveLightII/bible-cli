@@ -351,6 +351,30 @@ class RecoverySource:
             (lang, bookIndex, chapter, section, seq),
         ).fetchone()
 
+    def maxChapter(self, bookIndex):
+        cur = self.conn.cursor()
+        row = cur.execute(
+            "SELECT MAX(chapter) AS m FROM content WHERE language=? AND book_index=?",
+            (self.lang, bookIndex),
+        ).fetchone()
+        return row["m"] or 1
+
+    def chapterRows(self, bookIndex, chapter, lang):
+        cur = self.conn.cursor()
+        return cur.execute(
+            "SELECT section, content FROM content WHERE language=? AND book_index=? "
+            "AND chapter=? ORDER BY section",
+            (lang, bookIndex, chapter),
+        ).fetchall()
+
+    def verseText(self, bookIndex, chapter, section, lang):
+        cur = self.conn.cursor()
+        return cur.execute(
+            "SELECT content FROM content WHERE language=? AND book_index=? "
+            "AND chapter=? AND section=?",
+            (lang, bookIndex, chapter, section),
+        ).fetchone()
+
     def intros(self, bookIndex, lang=None):
         lang = self.lang if lang is None else lang
         cur = self.conn.cursor()
@@ -735,12 +759,8 @@ def cmdSearch(args, conn):
 
 def renderChapter(conn, bookIndex, chapter, sectionFilter, langPrimary,
                    langSecondary, showOutline, showFootnote, color):
-    cur = conn.cursor()
-    rows = cur.execute(
-        "SELECT section, content FROM content WHERE language=? AND book_index=? "
-        "AND chapter=? ORDER BY section",
-        (langPrimary, bookIndex, chapter),
-    ).fetchall()
+    source = RecoverySource(conn)
+    rows = source.chapterRows(bookIndex, chapter, langPrimary)
     if not rows:
         sys.stderr.write("查無此章節\n")
         sys.exit(1)
@@ -749,11 +769,7 @@ def renderChapter(conn, bookIndex, chapter, sectionFilter, langPrimary,
 
     secondaryMap = {}
     if langSecondary:
-        srows = cur.execute(
-            "SELECT section, content FROM content WHERE language=? AND book_index=? "
-            "AND chapter=? ORDER BY section",
-            (langSecondary, bookIndex, chapter),
-        ).fetchall()
+        srows = source.chapterRows(bookIndex, chapter, langSecondary)
         secondaryMap = {r["section"]: r["content"] for r in srows}
 
     indentUnit = "  "
@@ -1180,11 +1196,7 @@ class App:
                 "SELECT MAX(Chapter) AS m FROM Bible WHERE Book=?", (bookIndex,)
             ).fetchone()
         else:
-            cur = self.conn.cursor()
-            row = cur.execute(
-                "SELECT MAX(chapter) AS m FROM content WHERE language='big5' AND book_index=?",
-                (bookIndex,),
-            ).fetchone()
+            return self.source.maxChapter(bookIndex)
         return row["m"] or 1
 
 
@@ -1350,12 +1362,9 @@ class App:
             self.statusMessage = "目前沒有可複製的經節"
             return
         langPrimary = "cuv_big5" if self.showCuv else "big5"
-        cur = self.conn.cursor()
-        row = cur.execute(
-            "SELECT content FROM content WHERE language=? AND book_index=? "
-            "AND chapter=? AND section=?",
-            (langPrimary, world.selectedBookIndex, world.selectedChapter, section),
-        ).fetchone()
+        row = self.source.verseText(
+            world.selectedBookIndex, world.selectedChapter, section, langPrimary
+        )
         if not row:
             self.statusMessage = "查無經文內容"
             return
@@ -1404,13 +1413,8 @@ class App:
         else:
             langPrimary = "cuv_big5" if self.showCuv else "big5"
             bookName = bookDisplayName(self.conn, bookIndex, "big5")
-            cur = self.conn.cursor()
             for s in sections:
-                row = cur.execute(
-                    "SELECT content FROM content WHERE language=? AND book_index=? "
-                    "AND chapter=? AND section=?",
-                    (langPrimary, bookIndex, chapter, s),
-                ).fetchone()
+                row = self.source.verseText(bookIndex, chapter, s, langPrimary)
                 if row:
                     parts.append(f"{bookName} {chapter}:{s}　{row['content']}")
         if not parts:
@@ -1436,11 +1440,7 @@ class App:
     def _versePreview(self, bookIndex, chapter, section):
         if self.hasDb:
             langPrimary = "cuv_big5" if self.showCuv else "big5"
-            row = self.conn.execute(
-                "SELECT content FROM content WHERE language=? AND book_index=? "
-                "AND chapter=? AND section=?",
-                (langPrimary, bookIndex, chapter, section),
-            ).fetchone()
+            row = self.source.verseText(bookIndex, chapter, section, langPrimary)
             if row:
                 return row["content"]
         conn = self._openStrongConn()
@@ -1729,18 +1729,11 @@ class App:
         bookIndex = self.restoreWorld.selectedBookIndex
         chapter = self.restoreWorld.selectedChapter
         langPrimary = "cuv_big5" if self.showCuv else "big5"
-        cur = self.conn.cursor()
-        rows = cur.execute(
-            "SELECT section, content FROM content WHERE language=? AND book_index=? AND chapter=? ORDER BY section",
-            (langPrimary, bookIndex, chapter),
-        ).fetchall()
+        rows = self.source.chapterRows(bookIndex, chapter, langPrimary)
         outlines = getOutlines(self.conn, langPrimary, bookIndex, chapter) if self.showOutline else {}
         secondaryMap = {}
         if self.showEn:
-            srows = cur.execute(
-                "SELECT section, content FROM content WHERE language='eng' AND book_index=? AND chapter=? ORDER BY section",
-                (bookIndex, chapter),
-            ).fetchall()
+            srows = self.source.chapterRows(bookIndex, chapter, "eng")
             secondaryMap = {r["section"]: r["content"] for r in srows}
 
         fnEnabled = self.showOutline
