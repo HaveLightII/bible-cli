@@ -430,6 +430,16 @@ class CuvSource:
         ).fetchone()
 
 
+class StrongDictSource:
+    def __init__(self, conn):
+        self.conn = conn
+
+    def lookup(self, code):
+        return self.conn.execute(
+            "SELECT word, data FROM dictionary WHERE word = ?", (code,)
+        ).fetchone()
+
+
 def resolveBook(conn, name):
     return RecoverySource(conn).resolveBook(name)
 
@@ -576,10 +586,7 @@ def cmdStrong(args, _conn):
         sys.exit(1)
 
     dconn = connectDict(args.dict)
-    cur = dconn.cursor()
-    row = cur.execute(
-        "SELECT word, data FROM dictionary WHERE word = ?", (code,)
-    ).fetchone()
+    row = StrongDictSource(dconn).lookup(code)
     if not row:
         sys.stderr.write(f"查無 Strong 編號: {code}\n")
         sys.exit(1)
@@ -596,10 +603,7 @@ def printStrongDefinition(dictPath, code, color):
               else f"[{code} 為佔位符，無對應字典資料]")
         return
     dconn = connectDict(dictPath)
-    cur = dconn.cursor()
-    row = cur.execute(
-        "SELECT word, data FROM dictionary WHERE word = ?", (code,)
-    ).fetchone()
+    row = StrongDictSource(dconn).lookup(code)
     if not row:
         sys.stderr.write(f"查無 Strong 編號: {code}\n")
         return
@@ -1925,9 +1929,7 @@ class App:
             lines = ["尚未偵測到 Strong 字典（.dct.mybible），無法查字義。"]
             self.strongDefCache[code] = lines
             return lines
-        row = dconn.execute(
-            "SELECT word, data FROM dictionary WHERE word = ?", (code,)
-        ).fetchone()
+        row = StrongDictSource(dconn).lookup(code)
         if not row:
             lines = [f"查無 Strong 編號: {code}"]
         else:
@@ -3221,9 +3223,7 @@ def _printStrongDefinitionSafe(dictPath, code, color):
     if dconn is None:
         print("尚未偵測到 Strong 字典（.dct.mybible），無法查字義。")
         return
-    row = dconn.execute(
-        "SELECT word, data FROM dictionary WHERE word = ?", (code,)
-    ).fetchone()
+    row = StrongDictSource(dconn).lookup(code)
     if not row:
         print(f"查無 Strong 編號: {code}")
         return
