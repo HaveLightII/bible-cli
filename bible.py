@@ -262,40 +262,70 @@ def connect(dbPath):
     return conn
 
 
+class RecoverySource:
+    def __init__(self, conn, lang="big5"):
+        self.conn = conn
+        self.lang = lang
+
+    def resolveBook(self, name):
+        name = name.strip()
+        cur = self.conn.cursor()
+        row = cur.execute(
+            "SELECT book_index FROM book_name WHERE name = ? OR acronym_name = ? LIMIT 1",
+            (name, name),
+        ).fetchone()
+        if row:
+            return row["book_index"]
+
+        row = cur.execute(
+            "SELECT book_index FROM book_name WHERE lower(name) = lower(?) "
+            "OR lower(acronym_name) = lower(?) LIMIT 1",
+            (name, name),
+        ).fetchone()
+        if row:
+            return row["book_index"]
+
+        row = cur.execute(
+            "SELECT book_index FROM book_name WHERE name LIKE ? OR acronym_name LIKE ? LIMIT 1",
+            (f"%{name}%", f"%{name}%"),
+        ).fetchone()
+        if row:
+            return row["book_index"]
+        return None
+
+    def bookName(self, bookIndex, lang=None):
+        lang = self.lang if lang is None else lang
+        cur = self.conn.cursor()
+        row = cur.execute(
+            "SELECT name FROM book_name WHERE book_index=? AND language=?",
+            (bookIndex, lang),
+        ).fetchone()
+        return row["name"] if row else f"[book {bookIndex}]"
+
+    def bookAcronym(self, bookIndex, lang, default=None):
+        cur = self.conn.cursor()
+        row = cur.execute(
+            "SELECT acronym_name FROM book_name WHERE book_index=? AND language=?",
+            (bookIndex, lang),
+        ).fetchone()
+        return row["acronym_name"] if row else default
+
+    def listBooks(self, lang=None):
+        lang = self.lang if lang is None else lang
+        cur = self.conn.cursor()
+        rows = cur.execute(
+            "SELECT book_index, name FROM book_name WHERE language=? ORDER BY book_index",
+            (lang,),
+        ).fetchall()
+        return [(r["book_index"], r["name"]) for r in rows]
+
+
 def resolveBook(conn, name):
-    name = name.strip()
-    cur = conn.cursor()
-    row = cur.execute(
-        "SELECT book_index FROM book_name WHERE name = ? OR acronym_name = ? LIMIT 1",
-        (name, name),
-    ).fetchone()
-    if row:
-        return row["book_index"]
-
-    row = cur.execute(
-        "SELECT book_index FROM book_name WHERE lower(name) = lower(?) "
-        "OR lower(acronym_name) = lower(?) LIMIT 1",
-        (name, name),
-    ).fetchone()
-    if row:
-        return row["book_index"]
-
-    row = cur.execute(
-        "SELECT book_index FROM book_name WHERE name LIKE ? OR acronym_name LIKE ? LIMIT 1",
-        (f"%{name}%", f"%{name}%"),
-    ).fetchone()
-    if row:
-        return row["book_index"]
-    return None
+    return RecoverySource(conn).resolveBook(name)
 
 
 def bookDisplayName(conn, bookIndex, lang="big5"):
-    cur = conn.cursor()
-    row = cur.execute(
-        "SELECT name FROM book_name WHERE book_index=? AND language=?",
-        (bookIndex, lang),
-    ).fetchone()
-    return row["name"] if row else f"[book {bookIndex}]"
+    return RecoverySource(conn).bookName(bookIndex, lang)
 
 
 def insertFootnoteMarkers(content, footnotes, color=True):
@@ -616,20 +646,15 @@ def cmdOrig(args, _conn):
 
 
 def cmdList(args, conn):
-    cur = conn.cursor()
-    lang = "big5"
-    rows = cur.execute(
-        "SELECT book_index, name FROM book_name WHERE language=? ORDER BY book_index",
-        (lang,),
-    ).fetchall()
+    rows = RecoverySource(conn).listBooks()
     start, end = 1, 66
     if args.testament == "舊約":
         start, end = 1, 39
     elif args.testament == "新約":
         start, end = 40, 66
-    for r in rows:
-        if start <= r["book_index"] <= end:
-            print(f"{r['book_index']:>3}  {r['name']}")
+    for bookIndex, name in rows:
+        if start <= bookIndex <= end:
+            print(f"{bookIndex:>3}  {name}")
 
 
 def cmdIntro(args, conn):
@@ -684,12 +709,10 @@ def cmdSearch(args, conn):
     if not rows:
         print("沒有找到符合的經文")
         return
+    source = RecoverySource(conn)
+    acrLang = args.lang if args.lang in zhLangs else "big5"
     for r in rows:
-        acronymRow = cur.execute(
-            "SELECT acronym_name FROM book_name WHERE book_index=? AND language=?",
-            (r["book_index"], args.lang if args.lang in zhLangs else "big5"),
-        ).fetchone()
-        acr = acronymRow["acronym_name"] if acronymRow else str(r["book_index"])
+        acr = source.bookAcronym(r["book_index"], acrLang, str(r["book_index"]))
         highlighted = r["content"].replace(
             args.query, f"{red}{args.query}{reset}"
         )
@@ -1052,6 +1075,7 @@ class App:
         self.stdscr = stdscr
         self.conn = conn
         self.hasDb = conn is not None
+        self.source = RecoverySource(conn) if conn is not None else None
 
         self.strongBiblePath = strongBiblePath
         self.dictPath = dictPath
@@ -1131,11 +1155,7 @@ class App:
         self._detectStorage()
 
     def _loadBooks(self):
-        cur = self.conn.cursor()
-        rows = cur.execute(
-            "SELECT book_index, name FROM book_name WHERE language='big5' ORDER BY book_index"
-        ).fetchall()
-        return [(r["book_index"], r["name"]) for r in rows]
+        return self.source.listBooks()
 
     def _maxChapterFor(self, world, bookIndex):
         if world.kind == "strong":
@@ -2567,13 +2587,9 @@ class App:
         acrLang = lang if lang in zhLangs else "big5"
         results = []
         for r in rows:
-            acrRow = cur.execute(
-                "SELECT acronym_name FROM book_name WHERE book_index=? AND language=?",
-                (r["book_index"], acrLang),
-            ).fetchone()
             results.append({
                 "book_index": r["book_index"],
-                "acr": acrRow["acronym_name"] if acrRow else str(r["book_index"]),
+                "acr": self.source.bookAcronym(r["book_index"], acrLang, str(r["book_index"])),
                 "chapter": r["chapter"],
                 "section": r["section"],
                 "content": r["content"],
