@@ -375,6 +375,29 @@ class RecoverySource:
             (lang, bookIndex, chapter, section),
         ).fetchone()
 
+    def search(self, lang, includeTerms, excludeTerms=()):
+        where = " AND ".join(["content LIKE ?"] * len(includeTerms))
+        params = [lang] + [f"%{t}%" for t in includeTerms]
+        sql = f"SELECT book_index, chapter, section, content FROM content WHERE language=? AND ({where})"
+        if excludeTerms:
+            notWhere = " OR ".join(["content LIKE ?"] * len(excludeTerms))
+            sql += f" AND NOT ({notWhere})"
+            params += [f"%{t}%" for t in excludeTerms]
+        sql += " ORDER BY book_index, chapter, section"
+        cur = self.conn.cursor()
+        rows = cur.execute(sql, params).fetchall()
+        acrLang = lang if lang in zhLangs else "big5"
+        results = []
+        for r in rows:
+            results.append({
+                "book_index": r["book_index"],
+                "acr": self.bookAcronym(r["book_index"], acrLang, str(r["book_index"])),
+                "chapter": r["chapter"],
+                "section": r["section"],
+                "content": r["content"],
+            })
+        return results
+
     def intros(self, bookIndex, lang=None):
         lang = self.lang if lang is None else lang
         cur = self.conn.cursor()
@@ -738,23 +761,15 @@ def cmdNote(args, conn):
 
 
 def cmdSearch(args, conn):
-    cur = conn.cursor()
-    rows = cur.execute(
-        "SELECT book_index, chapter, section, content FROM content "
-        "WHERE language=? AND content LIKE ? ORDER BY book_index, chapter, section",
-        (args.lang, f"%{args.query}%"),
-    ).fetchall()
-    if not rows:
+    results = RecoverySource(conn).search(args.lang, [args.query])
+    if not results:
         print("沒有找到符合的經文")
         return
-    source = RecoverySource(conn)
-    acrLang = args.lang if args.lang in zhLangs else "big5"
-    for r in rows:
-        acr = source.bookAcronym(r["book_index"], acrLang, str(r["book_index"]))
+    for r in results:
         highlighted = r["content"].replace(
             args.query, f"{red}{args.query}{reset}"
         )
-        print(f"{dim}{acr} {r['chapter']}:{r['section']}{reset}  {highlighted}")
+        print(f"{dim}{r['acr']} {r['chapter']}:{r['section']}{reset}  {highlighted}")
 
 
 def renderChapter(conn, bookIndex, chapter, sectionFilter, langPrimary,
@@ -2578,26 +2593,7 @@ class App:
 
     def _execSearchQuery(self, useEnglish, includeTerms, excludeTerms):
         lang = "eng" if useEnglish else ("cuv_big5" if self.showCuv else "big5")
-        where = " AND ".join(["content LIKE ?"] * len(includeTerms))
-        params = [lang] + [f"%{t}%" for t in includeTerms]
-        sql = f"SELECT book_index, chapter, section, content FROM content WHERE language=? AND ({where})"
-        if excludeTerms:
-            notWhere = " OR ".join(["content LIKE ?"] * len(excludeTerms))
-            sql += f" AND NOT ({notWhere})"
-            params += [f"%{t}%" for t in excludeTerms]
-        sql += " ORDER BY book_index, chapter, section"
-        cur = self.conn.cursor()
-        rows = cur.execute(sql, params).fetchall()
-        acrLang = lang if lang in zhLangs else "big5"
-        results = []
-        for r in rows:
-            results.append({
-                "book_index": r["book_index"],
-                "acr": self.source.bookAcronym(r["book_index"], acrLang, str(r["book_index"])),
-                "chapter": r["chapter"],
-                "section": r["section"],
-                "content": r["content"],
-            })
+        results = self.source.search(lang, includeTerms, excludeTerms)
         label = "／".join(includeTerms)
         if excludeTerms:
             label += "　排除：" + "／".join(excludeTerms)
