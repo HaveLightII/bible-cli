@@ -2896,6 +2896,8 @@ class App:
             try:
                 _, mx, my, _, bstate = curses.getmouse()
             except curses.error:
+                if not hasattr(curses, "BUTTON5_PRESSED"):
+                    self._scrollCurrent(3)
                 return True
             self._handleMouse(my, mx, bstate)
             return True
