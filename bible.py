@@ -1086,7 +1086,7 @@ def buildParser():
         "--mode", choices=["auto", "recovery", "strong"], default="auto",
         type=normalizeModeName,
         help="不帶子指令時要啟動的介面："
-             "auto=依偵測到的檔案自動判斷（兩者皆有時預設和合本）、"
+             "auto=依偵測到的檔案自動判斷（兩者皆有時預設恢復本）、"
              "recovery=強制恢復本 TUI、strong=強制原文 Strong TUI",
     )
     sub = p.add_subparsers(dest="cmd")
@@ -3791,10 +3791,10 @@ def launchInteractive(args, resources):
             mode = "strong"
         elif stored == "recovery" and hasDb:
             mode = "recovery"
-        elif hasStrongBible:
-            mode = "strong"
         elif hasDb:
             mode = "recovery"
+        elif hasStrongBible:
+            mode = "strong"
         else:
             sys.stderr.write(noDatabaseMsg)
             sys.exit(1)
