@@ -4,7 +4,7 @@ bible.py — 恢復本聖經 CLI / TUI 合一版
 
 用法：
     python3 bible.py                    # 不帶參數 -> 依同目錄檔案自動判斷要開啟的介面
-    python3 bible.py --mode restore     # 強制啟動恢復本 TUI（需 bible.db）
+    python3 bible.py --mode recovery    # 強制啟動恢復本 TUI（需 bible.db）
     python3 bible.py --mode strong      # 強制啟動原文 Strong TUI 互動模式（需 .mybible）
     python3 bible.py --db X             # 指定資料庫路徑 -> 仍走上面的自動判斷邏輯
     python3 bible.py list [舊約|新約]    # 帶子指令 -> 走 CLI
@@ -930,6 +930,10 @@ def cmdRead(args, conn):
     )
 
 
+def normalizeModeName(value):
+    return "recovery" if value == "restore" else value
+
+
 def buildParser():
     p = argparse.ArgumentParser(description="恢復本聖經 CLI / TUI")
     p.add_argument(
@@ -937,10 +941,11 @@ def buildParser():
     )
     p.add_argument("--db", default=None, help="sqlite 資料庫路徑")
     p.add_argument(
-        "--mode", choices=["auto", "restore", "strong"], default="auto",
+        "--mode", choices=["auto", "recovery", "strong"], default="auto",
+        type=normalizeModeName,
         help="不帶子指令時要啟動的介面："
              "auto=依偵測到的檔案自動判斷（兩者皆有時預設和合本）、"
-             "restore=強制恢復本 TUI、strong=強制原文 Strong TUI",
+             "recovery=強制恢復本 TUI、strong=強制原文 Strong TUI",
     )
     sub = p.add_subparsers(dest="cmd")
 
@@ -1137,7 +1142,7 @@ optionFields = [
     ("recovery_db_path", "恢復本資料庫路徑 (bible.db)"),
     ("strong_db_path", "Strong 原文聖經模組路徑 (.bbl.mybible)"),
     ("dict_db_path", "Strong 原文字典路徑 (.dct.mybible)"),
-    ("default_mode", "預設啟動模式 (restore 或 strong)"),
+    ("default_mode", "預設啟動模式 (recovery 或 strong)"),
     ("default_english", "預設顯示英文對照 (1 或 0)"),
     ("default_outline", "預設顯示綱目及註解 (1 或 0)"),
     ("note_db_path", "筆記資料庫路徑 (.bible-note.db)"),
@@ -1147,10 +1152,10 @@ optionFields = [
 class World:
     """恢復本／原文 Strong 兩套平行畫面共用的導覽狀態容器。
 
-    restore 與 strong 兩個模式在書卷清單／章節清單／讀經畫面上的捲動位置、
+    recovery 與 strong 兩個模式在書卷清單／章節清單／讀經畫面上的捲動位置、
     目前選取的書卷章節、展開狀態、讀經內容快取等，結構完全相同，僅差在
     存取的資料來源與畫面文字／代號。這裡把該結構抽成一份，App 各持有一個
-    self.restoreWorld 與 self.strongWorld 實例，避免同一組欄位在 __init__
+    self.recoveryWorld 與 self.strongWorld 實例，避免同一組欄位在 __init__
     寫兩次、且日後修改時忘了同步另一份。
     """
 
@@ -1223,8 +1228,8 @@ class App:
         self._quitPromptFrom = None
         self.statusMessage = None
 
-        self.restoreWorld = World(
-            kind="restore",
+        self.recoveryWorld = World(
+            kind="recovery",
             books=self._loadBooks() if self.hasDb else [],
             booksTitle=" 書卷清單",
             chaptersTitleSuffix="",
@@ -1245,7 +1250,7 @@ class App:
         self.searchResults = []
         self.searchScroll = 0
         self.searchIdx = 0
-        self.searchKind = "restore"
+        self.searchKind = "recovery"
         self._cuvSearchSource = None
 
         self.strongWorld = World(
@@ -1338,7 +1343,7 @@ class App:
             elif isinstance(val, list):
                 val = list(val)
             snap[key] = val
-        snap["restoreWorld"] = self._snapshotWorld(self.restoreWorld)
+        snap["recoveryWorld"] = self._snapshotWorld(self.recoveryWorld)
         snap["strongWorld"] = self._snapshotWorld(self.strongWorld)
         return snap
 
@@ -1350,15 +1355,15 @@ class App:
             return False
         snap = self.history.pop()
         for key, val in snap.items():
-            if key == "restoreWorld":
+            if key == "recoveryWorld":
                 for k2, v2 in val.items():
-                    setattr(self.restoreWorld, k2, v2)
+                    setattr(self.recoveryWorld, k2, v2)
             elif key == "strongWorld":
                 for k2, v2 in val.items():
                     setattr(self.strongWorld, k2, v2)
             else:
                 setattr(self, key, val)
-        self.restoreWorld.cacheKey = None
+        self.recoveryWorld.cacheKey = None
         self.strongWorld.cacheKey = None
         return True
 
@@ -1381,7 +1386,7 @@ class App:
             return "找不到可用的剪貼簿工具，且無法寫入家目錄，複製失敗"
 
     def _currentReadSection(self):
-        world = self.restoreWorld
+        world = self.recoveryWorld
         for line in world.readLines[world.readScroll:]:
             if line.section is not None:
                 return line.section
@@ -1401,7 +1406,7 @@ class App:
         return None
 
     def _currentContextRef(self):
-        r, s = self.restoreWorld, self.strongWorld
+        r, s = self.recoveryWorld, self.strongWorld
         if self.mode == "read" and r.selectedBookIndex and r.selectedChapter:
             return r.selectedBookIndex, r.selectedChapter, self._currentReadSection()
         if self.mode == "strong_read" and s.selectedBookIndex and s.selectedChapter:
@@ -1409,7 +1414,7 @@ class App:
         return None, None, None
 
     def _currentAnyBook(self):
-        r, s = self.restoreWorld, self.strongWorld
+        r, s = self.recoveryWorld, self.strongWorld
         if self.mode in ("read", "chapters") and r.selectedBookIndex:
             return r.selectedBookIndex
         if self.mode == "books" and r.books:
@@ -1447,18 +1452,18 @@ class App:
         raise ValueError("參數過多")
 
     def _toggleExpandSection(self, section):
-        expanded = self.restoreWorld.expanded
+        expanded = self.recoveryWorld.expanded
         if section in expanded:
             expanded.discard(section)
         else:
             expanded.add(section)
 
     def _forceExpandSection(self, section):
-        self.restoreWorld.expanded.add(section)
-        self.restoreWorld.cacheKey = None
+        self.recoveryWorld.expanded.add(section)
+        self.recoveryWorld.cacheKey = None
 
     def _copyCurrentVerse(self):
-        world = self.restoreWorld
+        world = self.recoveryWorld
         section = self._currentReadSection()
         if section is None:
             self.statusMessage = "目前沒有可複製的經節"
@@ -1546,8 +1551,17 @@ class App:
                 return strongTagPattern.sub("", row["Scripture"])
         return ""
 
+    @staticmethod
+    def _scrollTargetRow(verseRow, section):
+        if not section or not verseRow:
+            return 0
+        if section in verseRow:
+            return verseRow[section]
+        nearest = min(verseRow, key=lambda s: (abs(s - section), s))
+        return verseRow[nearest]
+
     def _jumpRecovery(self, bookIndex, chapter, section):
-        world = self.restoreWorld
+        world = self.recoveryWorld
         self._pushHistory()
         world.selectedBookIndex = bookIndex
         world.chapterCount = self._maxChapterFor(world, bookIndex)
@@ -1562,7 +1576,7 @@ class App:
             bookIndex, chapter, self.showEn, self.showCuv, self.showOutline, frozenset(world.expanded),
         )
         world.cacheW = w
-        world.readScroll = world.verseRow.get(section, 0) if section else 0
+        world.readScroll = self._scrollTargetRow(world.verseRow, section)
 
     def _jumpStrong(self, bookIndex, chapter, section):
         world = self.strongWorld
@@ -1578,14 +1592,14 @@ class App:
         world.readLines = self._buildStrongReadLines(w)
         world.cacheKey = (bookIndex, chapter, frozenset(world.expanded))
         world.cacheW = w
-        world.readScroll = world.verseRow.get(section, 0) if section else 0
+        world.readScroll = self._scrollTargetRow(world.verseRow, section)
 
     def _searchKindHere(self):
         if self.mode in ("strong_books", "strong_chapters", "strong_read"):
             return "strong"
         if self.mode in ("search_input", "search_results"):
             return self.searchKind
-        return "restore"
+        return "recovery"
 
     def _openSearch(self):
         kind = self._searchKindHere()
@@ -1717,9 +1731,9 @@ class App:
         else:
             drawMode = self.mode
         if drawMode == "books":
-            self._drawBooksFor(self.restoreWorld, h, w)
+            self._drawBooksFor(self.recoveryWorld, h, w)
         elif drawMode == "chapters":
-            self._drawChaptersFor(self.restoreWorld, h, w)
+            self._drawChaptersFor(self.recoveryWorld, h, w)
         elif drawMode == "read":
             self.drawRead(h, w)
         elif drawMode == "search_input":
@@ -1834,8 +1848,8 @@ class App:
 
     def _buildReadLines(self, w):
         curses = self.curses
-        bookIndex = self.restoreWorld.selectedBookIndex
-        chapter = self.restoreWorld.selectedChapter
+        bookIndex = self.recoveryWorld.selectedBookIndex
+        chapter = self.recoveryWorld.selectedChapter
         langPrimary = "cuv_big5" if self.showCuv else "big5"
         rows = self.source.chapterRows(bookIndex, chapter, langPrimary)
         outlines = getOutlines(self.conn, langPrimary, bookIndex, chapter) if self.showOutline else {}
@@ -1901,7 +1915,7 @@ class App:
                 for wl in plainWrap("     " + secondaryMap[section], w - 1):
                     lines.append(Line([("".join(c for c, _ in wl), colorSecondary, None)], section=section))
 
-            if fnEnabled and section in self.restoreWorld.expanded:
+            if fnEnabled and section in self.recoveryWorld.expanded:
                 for f in fn:
                     label = f"      [{f['seq']}] "
                     for wl in plainWrap(label + (f["note"] or ""), w - 1):
@@ -1917,7 +1931,7 @@ class App:
 
     def drawRead(self, h, w):
         curses = self.curses
-        world = self.restoreWorld
+        world = self.recoveryWorld
         name = bookDisplayName(self.conn, world.selectedBookIndex, "big5")
         flags = []
         if self.showEn:
@@ -2499,7 +2513,7 @@ class App:
             if inStrongWorld:
                 ctxBook, ctxChapter = self.strongWorld.selectedBookIndex, self.strongWorld.selectedChapter
             else:
-                ctxBook, ctxChapter = self.restoreWorld.selectedBookIndex, self.restoreWorld.selectedChapter
+                ctxBook, ctxChapter = self.recoveryWorld.selectedBookIndex, self.recoveryWorld.selectedChapter
         try:
             bookIndex, chapter, section = self._parseRefArgs(tokens, ctxBook, ctxChapter)
         except ValueError as e:
@@ -2518,8 +2532,8 @@ class App:
 
     def _cmdSwitchMode(self, tokens, toStrong):
         if not tokens:
-            if self.mode == "read" and self.restoreWorld.selectedBookIndex and self.restoreWorld.selectedChapter:
-                ctxBook, ctxChapter = self.restoreWorld.selectedBookIndex, self.restoreWorld.selectedChapter
+            if self.mode == "read" and self.recoveryWorld.selectedBookIndex and self.recoveryWorld.selectedChapter:
+                ctxBook, ctxChapter = self.recoveryWorld.selectedBookIndex, self.recoveryWorld.selectedChapter
             elif self.mode == "strong_read" and self.strongWorld.selectedBookIndex and self.strongWorld.selectedChapter:
                 ctxBook, ctxChapter = self.strongWorld.selectedBookIndex, self.strongWorld.selectedChapter
             else:
@@ -2567,7 +2581,7 @@ class App:
             self._setCmdError(needRecoveryMsg)
             return
         if not tokens:
-            if self.mode == "read" and self.restoreWorld.selectedBookIndex and self.restoreWorld.selectedChapter:
+            if self.mode == "read" and self.recoveryWorld.selectedBookIndex and self.recoveryWorld.selectedChapter:
                 section = self._currentReadSection()
                 if section is None:
                     self._setCmdError("目前沒有可顯示註解的經節")
@@ -2671,7 +2685,7 @@ class App:
         else:
             self._setCmdError("請用 on 或 off，或不帶參數直接切換")
             return
-        self.restoreWorld.cacheKey = None
+        self.recoveryWorld.cacheKey = None
         state = "開啟" if getattr(self, attrName) else "關閉"
         self.statusMessage = f"已{state}{label}"
 
@@ -2996,8 +3010,8 @@ class App:
             (srcBook, srcChapter, srcSection, label, tgtBook, tgtChapter, tgtSection),
         )
         conn.commit()
-        if self.mode == "read" and srcBook == self.restoreWorld.selectedBookIndex and srcChapter == self.restoreWorld.selectedChapter:
-            self.restoreWorld.cacheKey = None
+        if self.mode == "read" and srcBook == self.recoveryWorld.selectedBookIndex and srcChapter == self.recoveryWorld.selectedChapter:
+            self.recoveryWorld.cacheKey = None
         self.statusMessage = f"已加上串珠 {label}"
 
     def handleKey(self, ch):
@@ -3080,9 +3094,9 @@ class App:
                 return True
 
         if self.mode == "books":
-            return self._keyBooksFor(self.restoreWorld, ch)
+            return self._keyBooksFor(self.recoveryWorld, ch)
         elif self.mode == "chapters":
-            return self._keyChaptersFor(self.restoreWorld, ch)
+            return self._keyChaptersFor(self.recoveryWorld, ch)
         elif self.mode == "read":
             return self._keyRead(ch)
         elif self.mode == "search_input":
@@ -3114,14 +3128,14 @@ class App:
             return
         if self.mode == "books":
             item = self.clickMap.get(y)
-            if item and item[0] == self.restoreWorld.bookClickTag:
-                self.restoreWorld.bookIdx = item[1]
-                self._enterBookFor(self.restoreWorld)
+            if item and item[0] == self.recoveryWorld.bookClickTag:
+                self.recoveryWorld.bookIdx = item[1]
+                self._enterBookFor(self.recoveryWorld)
         elif self.mode == "chapters":
             for key, item in self.clickMap.items():
                 if isinstance(key, tuple) and key[0] == y:
-                    self.restoreWorld.chapterIdx = item[1]
-                    self._enterChapterFor(self.restoreWorld)
+                    self.recoveryWorld.chapterIdx = item[1]
+                    self._enterChapterFor(self.recoveryWorld)
                     break
         elif self.mode == "read":
             refRegions = self.clickMapReadRefs.get(y)
@@ -3167,12 +3181,12 @@ class App:
 
     def _scrollCurrent(self, delta):
         if self.mode == "books":
-            r = self.restoreWorld
+            r = self.recoveryWorld
             r.bookIdx = max(0, min(len(r.books) - 1, r.bookIdx + delta))
         elif self.mode == "chapters":
-            self.restoreWorld.chapterScroll = max(0, self.restoreWorld.chapterScroll + delta)
+            self.recoveryWorld.chapterScroll = max(0, self.recoveryWorld.chapterScroll + delta)
         elif self.mode == "read":
-            self.restoreWorld.readScroll = max(0, self.restoreWorld.readScroll + delta)
+            self.recoveryWorld.readScroll = max(0, self.recoveryWorld.readScroll + delta)
         elif self.mode == "search_results":
             self.searchIdx = max(0, min(len(self.searchResults) - 1, self.searchIdx + delta))
         elif self.mode == "strong_books":
@@ -3189,7 +3203,7 @@ class App:
 
     def _keyRead(self, ch):
         curses = self.curses
-        world = self.restoreWorld
+        world = self.recoveryWorld
         if ch in (curses.KEY_UP, ord("k")):
             world.readScroll = max(0, world.readScroll - 1)
         elif ch in (curses.KEY_DOWN, ord("j")):
@@ -3291,7 +3305,7 @@ class App:
             self._jumpStrong(r["book_index"], r["chapter"], r["section"])
             return
         self._pushHistory()
-        world = self.restoreWorld
+        world = self.recoveryWorld
         world.selectedBookIndex = r["book_index"]
         world.chapterCount = self._maxChapterFor(world, world.selectedBookIndex)
         world.selectedChapter = r["chapter"]
@@ -3393,7 +3407,7 @@ def _printOrigChapter(bconn, bookIndex, chapter, verseFilter, color):
     return targetLegend
 
 
-def runStrongRepl(strongBiblePath, dictPath, canSwitchToRestore=False):
+def runStrongRepl(strongBiblePath, dictPath, canSwitchToRecovery=False):
     color = supportsAnsiColor()
     bconn = _openSqliteSoft(strongBiblePath)
     if bconn is None:
@@ -3406,7 +3420,7 @@ def runStrongRepl(strongBiblePath, dictPath, canSwitchToRestore=False):
     print("  b <書卷> <章>[:節]   顯示原文對照經文（指定節時，末尾會列出標號對照 Strong 編號）")
     print("  w <編號>            查詢上一次顯示的節中，第 N 個標號字的字義")
     print("  s <G26|H157>        直接查 Strong 編號")
-    if canSwitchToRestore:
+    if canSwitchToRecovery:
         print("  r                   切換回恢復本介面")
     print("  q                   離開")
 
@@ -3424,8 +3438,8 @@ def runStrongRepl(strongBiblePath, dictPath, canSwitchToRestore=False):
 
         if cmd == "q":
             return None
-        if cmd in ("r", "restore") and canSwitchToRestore:
-            return "restore"
+        if cmd in ("r", "recovery", "restore") and canSwitchToRecovery:
+            return "recovery"
         if cmd == "b" and len(parts) >= 3:
             bookIndex = resolveAnyBookName(parts[1])
             if bookIndex is None:
@@ -3464,7 +3478,7 @@ def runStrongRepl(strongBiblePath, dictPath, canSwitchToRestore=False):
                 continue
             _printStrongDefinitionSafe(dictPath, code, color)
         else:
-            options = "b / w / s" + (" / r" if canSwitchToRestore else "") + " / q"
+            options = "b / w / s" + (" / r" if canSwitchToRecovery else "") + " / q"
             print(f"無法辨識的指令，可用: {options}")
 
 
@@ -3506,29 +3520,29 @@ def launchInteractive(args, resources):
 
     mode = args.mode
     if mode == "auto":
-        stored = storedSettings.get("default_mode")
+        stored = normalizeModeName(storedSettings.get("default_mode"))
         if stored == "strong" and hasStrongBible:
             mode = "strong"
-        elif stored == "restore" and hasDb:
-            mode = "restore"
+        elif stored == "recovery" and hasDb:
+            mode = "recovery"
         elif hasStrongBible:
             mode = "strong"
         elif hasDb:
-            mode = "restore"
+            mode = "recovery"
         else:
             sys.stderr.write(
                 "在目前目錄找不到可用的聖經資料庫。\n"
                 "請確認同目錄下存在 bible.db（恢復本）或 .mybible 檔案（Strong 原文模組）。\n"
             )
             sys.exit(1)
-    elif mode == "restore" and not hasDb:
+    elif mode == "recovery" and not hasDb:
         sys.stderr.write(f"找不到恢復本資料庫: {dbPath}\n")
         sys.exit(1)
     elif mode == "strong" and not hasStrongBible:
         sys.stderr.write("找不到 Strong 原文聖經模組 (.bbl.mybible)。\n")
         sys.exit(1)
 
-    initialMode = "books" if mode == "restore" else "strong_books"
+    initialMode = "books" if mode == "recovery" else "strong_books"
     runTui(
         dbPath if hasDb else None,
         strongBiblePath if hasStrongBible else None,

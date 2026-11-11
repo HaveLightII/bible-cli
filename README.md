@@ -78,7 +78,7 @@ Windows 使用者若要使用互動式 TUI，需另外安裝 `windows-curses`：
 強制指定介面：
 
 ```bash
-  python3 bible.py --mode restore
+  python3 bible.py --mode recovery
   python3 bible.py --mode strong
 ```
 
