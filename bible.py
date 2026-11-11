@@ -235,6 +235,56 @@ enBookNames = [
     "3 John", "Jude", "Revelation",
 ]
 
+bookAliasZh = [
+    "創", "出", "利", "民", "申", "書", "士", "得", "撒上", "撒下",
+    "王上", "王下", "代上", "代下", "拉", "尼", "斯", "伯", "詩", "箴",
+    "傳", "歌", "賽", "耶", "哀", "結", "但", "何", "珥", "摩",
+    "俄", "拿", "彌", "鴻", "哈", "番", "該", "亞", "瑪",
+    "太", "可", "路", "約", "徒", "羅", "林前", "林後", "加", "弗",
+    "腓", "西", "帖前", "帖後", "提前", "提後", "多", "門", "來",
+    "雅", "彼前", "彼後", "約一", "約二", "約三", "猶", "啟",
+]
+
+bookAliasEn = [
+    ("gen", "gn"), ("ex", "exo", "exod"), ("lev", "lv"), ("num", "nu"),
+    ("deut", "dt", "deu"), ("josh", "jos"), ("judg", "jdg"), ("ru", "rth"),
+    ("1sam", "1sa"), ("2sam", "2sa"), ("1kgs", "1ki", "1kin"),
+    ("2kgs", "2ki", "2kin"), ("1chr", "1ch", "1chron"), ("2chr", "2ch", "2chron"),
+    ("ezr",), ("neh",), ("esth", "est"), ("jb",), ("ps", "psa", "psalm"),
+    ("prov", "pro"), ("eccl", "ecc", "eccles"), ("song", "sos", "sng", "songofsongs", "ss"),
+    ("isa", "is"), ("jer",), ("lam",), ("ezek", "eze"), ("dan", "dn"),
+    ("hos",), ("joel", "jl"), ("amos", "am"), ("obad", "oba", "ob"),
+    ("jon", "jnh"), ("mic",), ("nah", "na"), ("hab",), ("zeph", "zep"),
+    ("hag",), ("zech", "zec"), ("mal",),
+    ("matt", "mt", "mat"), ("mk", "mar"), ("lk", "luk"), ("jn", "joh"),
+    ("act",), ("rom", "ro"), ("1cor", "1co"), ("2cor", "2co"), ("gal",),
+    ("eph",), ("phil", "php", "phi"), ("col",), ("1thess", "1th", "1thes"),
+    ("2thess", "2th", "2thes"), ("1tim", "1ti"), ("2tim", "2ti"), ("tit",),
+    ("phlm", "phm", "philem"), ("heb",), ("jas", "jam"), ("1pet", "1pe", "1pt"),
+    ("2pet", "2pe", "2pt"), ("1jn", "1jo", "1joh"), ("2jn", "2jo", "2joh"),
+    ("3jn", "3jo", "3joh"), ("jd",), ("rev", "rv", "apoc"),
+]
+
+
+def _normBookKey(name):
+    return re.sub(r"[\s.]+", "", name.lower())
+
+
+def _buildBookAliasMap():
+    mapping = {}
+    for i, a in enumerate(bookAliasZh, start=1):
+        mapping[_normBookKey(a)] = i
+    for i, group in enumerate(bookAliasEn, start=1):
+        for a in group:
+            mapping.setdefault(_normBookKey(a), i)
+    extra = {"約壹": 62, "約貳": 63, "約參": 64}
+    for k, v in extra.items():
+        mapping.setdefault(k, v)
+    return mapping
+
+
+bookAliasMap = _buildBookAliasMap()
+
 colorOutline = 1
 colorFootnote = 2
 colorSection = 3
@@ -761,6 +811,10 @@ def resolveAnyBookName(name, conn=None):
         idx = resolveBook(conn, name)
         if idx:
             return idx
+    else:
+        idx = bookAliasMap.get(_normBookKey(name))
+        if idx:
+            return idx
     matches = [i for i, n in enumerate(zhBookNames, start=1) if name in n]
     if len(matches) == 1:
         return matches[0]
@@ -844,7 +898,10 @@ def cmdOrig(args, _conn):
 
 
 def cmdList(args, conn):
-    rows = RecoverySource(conn).listBooks()
+    if getattr(args, "sourceKind", "recovery") == "cuv":
+        rows = list(enumerate(zhBookNames, start=1))
+    else:
+        rows = RecoverySource(conn).listBooks()
     start, end = 1, 66
     if args.testament == "舊約":
         start, end = 1, 39
@@ -889,14 +946,24 @@ def cmdNote(args, conn):
 
 
 def cmdSearch(args, conn):
-    results = RecoverySource(conn).search(args.lang, [args.query])
+    cuv = getattr(args, "sourceKind", "recovery") == "cuv"
+    if cuv:
+        results = CuvSource(conn).search([args.query])
+        queryPattern = re.compile(
+            "\u3000?".join(re.escape(ch) for ch in args.query.replace("\u3000", ""))
+        ) if args.query.replace("\u3000", "") else None
+    else:
+        results = RecoverySource(conn).search(args.lang or "big5", [args.query])
     if not results:
         print("沒有找到符合的經文")
         return
     for r in results:
-        highlighted = r["content"].replace(
-            args.query, f"{red}{args.query}{reset}"
-        )
+        if cuv and queryPattern is not None:
+            highlighted = queryPattern.sub(lambda m: f"{red}{m.group(0)}{reset}", r["content"])
+        else:
+            highlighted = r["content"].replace(
+                args.query, f"{red}{args.query}{reset}"
+            )
         print(f"{dim}{r['acr']} {r['chapter']}:{r['section']}{reset}  {highlighted}")
 
 
@@ -947,8 +1014,24 @@ def renderChapter(conn, bookIndex, chapter, sectionFilter, langPrimary,
         print()
 
 
+def renderCuvChapter(conn, bookIndex, chapter, sectionFilter, color):
+    rows = CuvSource(conn).chapterRows(bookIndex, chapter)
+    if not rows:
+        sys.stderr.write("查無此章節\n")
+        sys.exit(1)
+    for r in rows:
+        verse = r["Verse"]
+        if sectionFilter and verse != sectionFilter:
+            continue
+        text = strongTagPattern.sub("", r["Scripture"])
+        label = f"{dim}{verse:>3}{reset}" if color else f"{verse:>3}"
+        print(f"{label}  {text}")
+        print()
+
+
 def cmdRead(args, conn):
-    bookIndex = resolveAnyBookName(args.book, conn)
+    cuv = getattr(args, "sourceKind", "recovery") == "cuv"
+    bookIndex = resolveAnyBookName(args.book, None if cuv else conn)
     if bookIndex is None:
         sys.stderr.write(f"找不到書卷: {args.book}\n")
         sys.exit(1)
@@ -961,6 +1044,13 @@ def cmdRead(args, conn):
         sectionFilter = int(sectionS)
     else:
         chapter = int(chapter)
+
+    if cuv:
+        color = (not args.noColor) and supportsAnsiColor()
+        header = f"{zhBookNames[bookIndex - 1]} 第{chapter}章"
+        print(f"{bold}{header}{reset}\n" if color else f"{header}\n")
+        renderCuvChapter(conn, bookIndex, chapter, sectionFilter, color)
+        return
 
     langPrimary = "cuv_big5" if args.cuv else "big5"
     langSecondary = "eng" if args.en else None
@@ -1004,22 +1094,36 @@ def buildParser():
     colorParent = argparse.ArgumentParser(add_help=False)
     colorParent.add_argument("--no-color", dest="noColor", action="store_true")
 
-    pList = sub.add_parser("list", help="列出書卷")
+    sourceParent = argparse.ArgumentParser(add_help=False)
+    sourceParent.add_argument(
+        "--source", choices=["cuv", "recovery"], default=None,
+        help="資料來源：cuv=和合本、recovery=恢復本；"
+             "未指定時有恢復本就用恢復本，否則用和合本",
+    )
+    sourceParent.add_argument(
+        "--strongbible", default=None,
+        help="和合本模組 .bbl.mybible 路徑（--source cuv 或無恢復本時使用）",
+    )
+
+    pList = sub.add_parser("list", parents=[sourceParent], help="列出書卷")
     pList.add_argument("testament", nargs="?", choices=["舊約", "新約"], default=None)
     pList.set_defaults(func=cmdList)
 
-    pRead = sub.add_parser("read", parents=[colorParent], help="讀取經文")
+    pRead = sub.add_parser("read", parents=[colorParent, sourceParent], help="讀取經文")
     pRead.add_argument("book")
     pRead.add_argument("chapter", help="章數，或 章:節")
-    pRead.add_argument("--en", action="store_true", help="附加英文對照(恢復本英文)")
-    pRead.add_argument("--cuv", action="store_true", help="改用和合本正文")
+    pRead.add_argument("--en", action="store_true", help="附加英文對照(恢復本英文，需恢復本)")
+    pRead.add_argument("--cuv", action="store_true", help="改用和合本正文（恢復本內附的和合本）")
     pRead.add_argument("--no-outline", dest="noOutline", action="store_true")
     pRead.add_argument("--no-footnote", dest="noFootnote", action="store_true")
     pRead.set_defaults(func=cmdRead)
 
-    pSearch = sub.add_parser("search", help="全文搜尋")
+    pSearch = sub.add_parser("search", parents=[sourceParent], help="全文搜尋")
     pSearch.add_argument("query")
-    pSearch.add_argument("--lang", default="big5", choices=zhLangs + enLangs)
+    pSearch.add_argument(
+        "--lang", default=None, choices=zhLangs + enLangs,
+        help="搜尋語言（預設 big5；和合本來源只支援 big5）",
+    )
     pSearch.set_defaults(func=cmdSearch)
 
     pIntro = sub.add_parser("intro", help="書卷簡介")
@@ -3602,6 +3706,58 @@ def runStrongRepl(strongBiblePath, dictPath, canSwitchToRecovery=False):
             print(f"無法辨識的指令，可用: {options}")
 
 
+noDatabaseMsg = (
+    "找不到可用的聖經資料庫。\n"
+    "請將 bible.db（恢復本）或 .mybible 檔案放在使用者資料目錄、"
+    "程式所在目錄或目前目錄，\n"
+    "並可執行 `bible.py data` 查看搜尋位置與偵測結果。\n"
+)
+
+
+def resolveSourceKind(args):
+    hasDb = bool(args.db and os.path.isfile(args.db))
+    strongPath = getattr(args, "strongbible", None)
+    hasCuv = bool(strongPath and os.path.isfile(strongPath))
+    want = getattr(args, "source", None)
+    if want == "recovery":
+        if not hasDb:
+            sys.stderr.write(f"找不到恢復本資料庫: {args.db}\n")
+            sys.exit(1)
+        return "recovery"
+    if want == "cuv":
+        if not hasCuv:
+            sys.stderr.write("找不到和合本模組 (.bbl.mybible)，可用 --strongbible 指定路徑。\n")
+            sys.exit(1)
+        return "cuv"
+    if hasDb:
+        return "recovery"
+    if hasCuv:
+        return "cuv"
+    sys.stderr.write(noDatabaseMsg)
+    sys.exit(1)
+
+
+def checkSourceCapabilities(args, kind):
+    if kind != "cuv":
+        return
+    problems = []
+    if args.cmd == "read":
+        if args.en:
+            problems.append("--en（英文對照）")
+        if args.noOutline:
+            problems.append("--no-outline（綱目）")
+        if args.noFootnote:
+            problems.append("--no-footnote（註腳）")
+    if args.cmd == "search" and args.lang not in (None, "big5"):
+        problems.append(f"--lang {args.lang}")
+    if problems:
+        sys.stderr.write(
+            f"{missingContentMsg}：和合本來源不支援 {'、'.join(problems)}；"
+            "請改用 --source recovery（需要恢復本 bible.db）。\n"
+        )
+        sys.exit(2)
+
+
 def _loadStoredSettingsDict():
     path = resolveNoteDbPath()
     if not path:
@@ -3640,12 +3796,7 @@ def launchInteractive(args, resources):
         elif hasDb:
             mode = "recovery"
         else:
-            sys.stderr.write(
-                "找不到可用的聖經資料庫。\n"
-                "請將 bible.db（恢復本）或 .mybible 檔案放在使用者資料目錄、"
-                "程式所在目錄或目前目錄，\n"
-                "並可執行 `bible.py data` 查看搜尋位置與偵測結果。\n"
-            )
+            sys.stderr.write(noDatabaseMsg)
             sys.exit(1)
     elif mode == "recovery" and not hasDb:
         sys.stderr.write(f"找不到恢復本資料庫: {dbPath}\n")
@@ -3689,13 +3840,19 @@ def main():
         args.func(args, None)
         return
 
+    if args.cmd in ("list", "read", "search"):
+        kind = resolveSourceKind(args)
+        checkSourceCapabilities(args, kind)
+        args.sourceKind = kind
+        if kind == "recovery":
+            conn = connect(args.db)
+        else:
+            conn = connectStrongBible(args.strongbible)
+        args.func(args, conn)
+        return
+
     if not os.path.exists(args.db):
-        sys.stderr.write(f"找不到恢復本資料庫: {args.db}\n")
-        if resources["strongBible"] or resources["dict"]:
-            sys.stderr.write(
-                "偵測到同目錄下有 Strong 相關模組，"
-                "可改用 `python3 bible.py orig ...` 或 `python3 bible.py strong ...`。\n"
-            )
+        sys.stderr.write(f"找不到恢復本資料庫: {args.db}\n{needRecoveryMsg}\n")
         sys.exit(1)
 
     conn = connect(args.db)
