@@ -989,6 +989,18 @@ def cwidth(ch):
     return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
 
 
+def fitWidth(text, width):
+    out = []
+    used = 0
+    for ch in text:
+        cw = cwidth(ch)
+        if used + cw > width:
+            break
+        out.append(ch)
+        used += cw
+    return "".join(out) + " " * (width - used)
+
+
 def _isWordChar(ch):
     return ch.isascii() and (ch.isalnum() or ch in ("'", "-"))
 
@@ -1743,7 +1755,7 @@ class App:
     def _title(self, text, w):
         curses = self.curses
         try:
-            self.stdscr.addstr(0, 0, text[: w - 1].ljust(w - 1), curses.color_pair(colorHeader) | curses.A_BOLD)
+            self.stdscr.addstr(0, 0, fitWidth(text, w - 1), curses.color_pair(colorHeader) | curses.A_BOLD)
         except curses.error:
             pass
 
@@ -1948,7 +1960,7 @@ class App:
             label = f"{r['acr']} {r['chapter']}:{r['section']}  {r['content']}"
             attr = curses.A_REVERSE if self.searchScroll + rowI == self.searchIdx else 0
             try:
-                self.stdscr.addstr(y, 0, label[: w - 1].ljust(w - 1), attr)
+                self.stdscr.addstr(y, 0, fitWidth(label, w - 1), attr)
             except curses.error:
                 pass
             self.clickMap[y] = ("search_result", self.searchScroll + rowI)
@@ -2141,6 +2153,8 @@ class App:
             world.chapterIdx = max(0, world.chapterIdx - self._pageStep() * cols)
         elif ch in (10, 13, curses.KEY_ENTER):
             self._enterChapterFor(world)
+        elif world.supportsSearch and ch == ord("/"):
+            self._openSearch()
         elif ch in (27, curses.KEY_BACKSPACE, 127, 8):
             self._goBack()
         return True
@@ -2173,6 +2187,8 @@ class App:
                 world.selectedChapter += 1
                 world.readScroll = 0
                 world.expanded = set()
+        elif ch in (ord("y"), ord("Y")):
+            self._copyCurrentStrongVerse()
         elif ch == ord("/"):
             self._openSearch()
         elif ch in (27, curses.KEY_BACKSPACE, 127, 8):
