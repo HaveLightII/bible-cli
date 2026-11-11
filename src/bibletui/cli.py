@@ -549,7 +549,7 @@ def launchInteractive(args, resources):
         sys.stderr.write("找不到 Strong 原文聖經模組 (.bbl.mybible)。\n")
         sys.exit(1)
 
-    from .app import runTui
+    from .tui.runner import runTui
 
     initialMode = "books" if mode == "recovery" else "strong_books"
     runTui(

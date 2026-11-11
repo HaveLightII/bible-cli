@@ -1,0 +1,2157 @@
+"""curses 互動介面主體。"""
+
+import datetime
+import os
+import sqlite3
+import subprocess
+import tempfile
+
+from ..books import (
+    enBookNames,
+    resolveAnyBookName,
+    zhBookNames,
+)
+from ..console import (
+    copyToClipboardText,
+    isWindows,
+)
+from ..constants import (
+    introTypeLabel,
+    missingContentMsg,
+    needRecoveryMsg,
+)
+from ..render import (
+    renderDictHtml,
+    splitStrongVerse,
+)
+from ..sources.cuv import (
+    CuvSource,
+    strongTagPattern,
+)
+from ..sources.recovery import (
+    RecoverySource,
+    bookDisplayName,
+    getFootnotes,
+    getOutlines,
+)
+from ..sources.strongdict import StrongDictSource
+from ..storage import (
+    noteDbDefaultPath,
+    openNoteDb,
+    resolveNoteDbPath,
+    writeNoteDbPointer,
+)
+from .repl import _openSqliteSoft
+from .text import (
+    Line,
+    SegLine,
+    cwidth,
+    fitWidth,
+    plainWrap,
+    wrapMarked,
+)
+from .theme import (
+    colorCmdLine,
+    colorFootnote,
+    colorHeader,
+    colorHelp,
+    colorOutline,
+    colorSecondary,
+    colorSection,
+    optionFields,
+)
+from .world import World
+
+
+class App:
+    def __init__(self, curses_mod, stdscr, conn, strongBiblePath=None,
+                 dictPath=None, initialMode="books"):
+        self.curses = curses_mod
+        self.stdscr = stdscr
+        self.conn = conn
+        self.hasDb = conn is not None
+        self.source = RecoverySource(conn) if conn is not None else None
+
+        self.strongBiblePath = strongBiblePath
+        self.dictPath = dictPath
+        self.hasStrongBible = bool(strongBiblePath)
+        self.strongConn = None
+        self.dictConn = None
+        self.strongDefCache = {}
+
+        self.mode = initialMode
+        self.modeStack = []
+        self.history = []
+        self._quitPromptFrom = None
+        self.statusMessage = None
+
+        self.recoveryWorld = World(
+            kind="recovery",
+            books=self._loadBooks() if self.hasDb else [],
+            booksTitle=" 書卷清單",
+            chaptersTitleSuffix="",
+            bookClickTag="book",
+            chapterClickTag="chapter",
+            booksMode="books",
+            chaptersMode="chapters",
+            readMode="read",
+            backKeys=(27,),
+            supportsSearch=True,
+        )
+        self.showEn = False
+        self.showCuv = False
+        self.showOutline = True
+
+        self.searchQuery = ""
+        self.searchInputText = ""
+        self.searchResults = []
+        self.searchScroll = 0
+        self.searchIdx = 0
+        self.searchKind = "recovery"
+        self._cuvSearchSource = None
+
+        self.strongWorld = World(
+            kind="strong",
+            books=list(enumerate(zhBookNames, start=1)) if self.hasStrongBible else [],
+            booksTitle=" 書卷清單（原文 Strong）",
+            chaptersTitleSuffix="（原文 Strong）",
+            bookClickTag="strongbook",
+            chapterClickTag="strongchapter",
+            booksMode="strong_books",
+            chaptersMode="strong_chapters",
+            readMode="strong_read",
+            backKeys=(27, self.curses.KEY_BACKSPACE, 127, 8),
+            supportsSearch=True,
+        )
+        self._strongWordCodes = {}
+        self.clickMapStrongWords = {}
+
+        self.commandMode = False
+        self.cmdBuffer = ""
+        self.cmdError = None
+        self._wantQuit = False
+        self.helpScroll = 0
+        self._helpTextLines = []
+
+        self._textViewTitle = ""
+        self._textViewRaw = ""
+        self._textViewLines = []
+        self._textViewScroll = 0
+        self._textViewCacheW = None
+
+        self.clickMapReadRefs = {}
+
+        self.storageEnabled = False
+        self.noteDbPath = None
+        self.noteConn = None
+        self.settings = {}
+        self._optionFieldIdx = 0
+        self._optionEditing = False
+        self._optionEditBuffer = ""
+        self._prevModeBeforeConfirm = None
+        self._detectStorage()
+
+    def _loadBooks(self):
+        return self.source.listBooks()
+
+    def _maxChapterFor(self, world, bookIndex):
+        if world.kind == "strong":
+            conn = self._openStrongConn()
+            if conn is None:
+                return 1
+            return CuvSource(conn).maxChapter(bookIndex)
+        return self.source.maxChapter(bookIndex)
+
+
+    def _pageStep(self):
+        h, _w = self.stdscr.getmaxyx()
+        return max(1, (h - 2) - 1)
+
+
+    _NAV_KEYS = (
+        "mode", "showEn", "showCuv", "showOutline",
+        "searchQuery", "searchInputText", "searchResults", "searchScroll", "searchIdx",
+        "searchKind",
+    )
+
+    _WORLD_NAV_KEYS = (
+        "bookIdx", "bookScroll",
+        "selectedBookIndex", "chapterCount", "chapterIdx", "chapterScroll",
+        "selectedChapter", "expanded", "readScroll",
+    )
+
+    def _snapshotWorld(self, world):
+        snap = {}
+        for key in self._WORLD_NAV_KEYS:
+            val = getattr(world, key)
+            if isinstance(val, set):
+                val = set(val)
+            elif isinstance(val, list):
+                val = list(val)
+            snap[key] = val
+        return snap
+
+    def _snapshot(self):
+        snap = {}
+        for key in self._NAV_KEYS:
+            val = getattr(self, key)
+            if isinstance(val, set):
+                val = set(val)
+            elif isinstance(val, list):
+                val = list(val)
+            snap[key] = val
+        snap["recoveryWorld"] = self._snapshotWorld(self.recoveryWorld)
+        snap["strongWorld"] = self._snapshotWorld(self.strongWorld)
+        return snap
+
+    def _pushHistory(self):
+        self.history.append(self._snapshot())
+
+    def _goBack(self):
+        if not self.history:
+            return False
+        snap = self.history.pop()
+        for key, val in snap.items():
+            if key == "recoveryWorld":
+                for k2, v2 in val.items():
+                    setattr(self.recoveryWorld, k2, v2)
+            elif key == "strongWorld":
+                for k2, v2 in val.items():
+                    setattr(self.strongWorld, k2, v2)
+            else:
+                setattr(self, key, val)
+        self.recoveryWorld.cacheKey = None
+        self.strongWorld.cacheKey = None
+        return True
+
+
+    def _copyToClipboard(self, text):
+        return copyToClipboardText(text)
+
+    def _copyTextSmart(self, text, label="經文"):
+        if not text:
+            return "沒有內容可複製"
+        if self._copyToClipboard(text):
+            return f"已複製{label}到剪貼簿"
+        home = os.path.expanduser("~")
+        path = os.path.join(home, ".bible-clipboard.txt")
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+            return f"找不到剪貼簿工具，已改將{label}存到 {path}"
+        except OSError:
+            return "找不到可用的剪貼簿工具，且無法寫入家目錄，複製失敗"
+
+    def _currentReadSection(self):
+        world = self.recoveryWorld
+        for line in world.readLines[world.readScroll:]:
+            if line.section is not None:
+                return line.section
+        for line in world.readLines[:world.readScroll]:
+            if line.section is not None:
+                return line.section
+        return None
+
+    def _currentStrongReadVerse(self):
+        world = self.strongWorld
+        for line in world.readLines[world.readScroll:]:
+            if line.verse is not None:
+                return line.verse
+        for line in world.readLines[:world.readScroll]:
+            if line.verse is not None:
+                return line.verse
+        return None
+
+    def _currentContextRef(self):
+        r, s = self.recoveryWorld, self.strongWorld
+        if self.mode == "read" and r.selectedBookIndex and r.selectedChapter:
+            return r.selectedBookIndex, r.selectedChapter, self._currentReadSection()
+        if self.mode == "strong_read" and s.selectedBookIndex and s.selectedChapter:
+            return s.selectedBookIndex, s.selectedChapter, self._currentStrongReadVerse()
+        return None, None, None
+
+    def _currentAnyBook(self):
+        r, s = self.recoveryWorld, self.strongWorld
+        if self.mode in ("read", "chapters") and r.selectedBookIndex:
+            return r.selectedBookIndex
+        if self.mode == "books" and r.books:
+            return r.books[r.bookIdx][0]
+        if self.mode in ("strong_read", "strong_chapters") and s.selectedBookIndex:
+            return s.selectedBookIndex
+        if self.mode == "strong_books" and s.books:
+            return s.books[s.bookIdx][0]
+        return None
+
+    def _parseRefArgs(self, tokens, ctxBook, ctxChapter):
+        if len(tokens) == 0:
+            if ctxBook is None or ctxChapter is None:
+                raise ValueError("目前不在章節內，請提供完整卷章節")
+            return ctxBook, ctxChapter, None
+        if len(tokens) == 1:
+            if ctxBook is None or ctxChapter is None:
+                raise ValueError("目前不在章節內，請提供完整卷章節")
+            if not tokens[0].isdigit():
+                raise ValueError("節數需為數字")
+            return ctxBook, ctxChapter, int(tokens[0])
+        if len(tokens) == 2:
+            if ctxBook is None:
+                raise ValueError("目前未選擇書卷")
+            if not (tokens[0].isdigit() and tokens[1].isdigit()):
+                raise ValueError("章節需為數字")
+            return ctxBook, int(tokens[0]), int(tokens[1])
+        if len(tokens) == 3:
+            bIdx = resolveAnyBookName(tokens[0], self.conn if self.hasDb else None)
+            if bIdx is None:
+                raise ValueError(f"找不到書卷: {tokens[0]}")
+            if not (tokens[1].isdigit() and tokens[2].isdigit()):
+                raise ValueError("章節需為數字")
+            return bIdx, int(tokens[1]), int(tokens[2])
+        raise ValueError("參數過多")
+
+    def _toggleExpandSection(self, section):
+        expanded = self.recoveryWorld.expanded
+        if section in expanded:
+            expanded.discard(section)
+        else:
+            expanded.add(section)
+
+    def _forceExpandSection(self, section):
+        self.recoveryWorld.expanded.add(section)
+        self.recoveryWorld.cacheKey = None
+
+    def _copyCurrentVerse(self):
+        world = self.recoveryWorld
+        section = self._currentReadSection()
+        if section is None:
+            self.statusMessage = "目前沒有可複製的經節"
+            return
+        langPrimary = "cuv_big5" if self.showCuv else "big5"
+        row = self.source.verseText(
+            world.selectedBookIndex, world.selectedChapter, section, langPrimary
+        )
+        if not row:
+            self.statusMessage = "查無經文內容"
+            return
+        bookName = bookDisplayName(self.conn, world.selectedBookIndex, "big5")
+        text = f"{bookName} {world.selectedChapter}:{section}　{row['content']}"
+        self.statusMessage = self._copyTextSmart(text, label=f"{bookName} {world.selectedChapter}:{section}")
+
+    def _copyCurrentStrongVerse(self):
+        world = self.strongWorld
+        verse = self._currentStrongReadVerse()
+        if verse is None:
+            self.statusMessage = "目前沒有可複製的經節"
+            return
+        conn = self._openStrongConn()
+        if conn is None:
+            self.statusMessage = "找不到原文 Strong 聖經模組"
+            return
+        row = CuvSource(conn).verseRaw(world.selectedBookIndex, world.selectedChapter, verse)
+        if not row:
+            self.statusMessage = "查無經文內容"
+            return
+        text = strongTagPattern.sub("", row["Scripture"])
+        bookName = zhBookNames[world.selectedBookIndex - 1]
+        full = f"{bookName} {world.selectedChapter}:{verse}　{text}"
+        self.statusMessage = self._copyTextSmart(full, label=f"{bookName} {world.selectedChapter}:{verse}")
+
+    def _copyVersesForSections(self, bookIndex, chapter, sections, fromStrong):
+        parts = []
+        if fromStrong:
+            conn = self._openStrongConn()
+            if conn is None:
+                self.statusMessage = "找不到原文 Strong 聖經模組"
+                return
+            bookName = zhBookNames[bookIndex - 1]
+            for s in sections:
+                row = CuvSource(conn).verseRaw(bookIndex, chapter, s)
+                if row:
+                    text = strongTagPattern.sub("", row["Scripture"])
+                    parts.append(f"{bookName} {chapter}:{s}　{text}")
+        else:
+            langPrimary = "cuv_big5" if self.showCuv else "big5"
+            bookName = bookDisplayName(self.conn, bookIndex, "big5")
+            for s in sections:
+                row = self.source.verseText(bookIndex, chapter, s, langPrimary)
+                if row:
+                    parts.append(f"{bookName} {chapter}:{s}　{row['content']}")
+        if not parts:
+            self.statusMessage = "查無指定經節"
+            return
+        self.statusMessage = self._copyTextSmart("\n".join(parts), label=f"{len(parts)} 節經文")
+
+    def _copyFootnotesForSections(self, bookIndex, chapter, sections):
+        if not self.hasDb:
+            self.statusMessage = needRecoveryMsg
+            return
+        langPrimary = "cuv_big5" if self.showCuv else "big5"
+        parts = []
+        for s in sections:
+            for f in getFootnotes(self.conn, langPrimary, bookIndex, chapter, s):
+                if f["note"]:
+                    parts.append(f["note"])
+        if not parts:
+            self.statusMessage = "查無指定經節的註解"
+            return
+        self.statusMessage = self._copyTextSmart("\n".join(parts), label="註解")
+
+    def _versePreview(self, bookIndex, chapter, section):
+        if self.hasDb:
+            langPrimary = "cuv_big5" if self.showCuv else "big5"
+            row = self.source.verseText(bookIndex, chapter, section, langPrimary)
+            if row:
+                return row["content"]
+        conn = self._openStrongConn()
+        if conn is not None:
+            row = CuvSource(conn).verseRaw(bookIndex, chapter, section)
+            if row:
+                return strongTagPattern.sub("", row["Scripture"])
+        return ""
+
+    @staticmethod
+    def _scrollTargetRow(verseRow, section):
+        if not section or not verseRow:
+            return 0
+        if section in verseRow:
+            return verseRow[section]
+        nearest = min(verseRow, key=lambda s: (abs(s - section), s))
+        return verseRow[nearest]
+
+    def _jumpRecovery(self, bookIndex, chapter, section):
+        world = self.recoveryWorld
+        self._pushHistory()
+        world.selectedBookIndex = bookIndex
+        world.chapterCount = self._maxChapterFor(world, bookIndex)
+        chapter = max(1, min(chapter, world.chapterCount))
+        world.selectedChapter = chapter
+        world.expanded = set()
+        self.mode = world.readMode
+        h, w = self.stdscr.getmaxyx()
+        w = max(1, w)
+        world.readLines, world.verseRow = self._buildReadLines(w)
+        world.cacheKey = (
+            bookIndex, chapter, self.showEn, self.showCuv, self.showOutline, frozenset(world.expanded),
+        )
+        world.cacheW = w
+        world.readScroll = self._scrollTargetRow(world.verseRow, section)
+
+    def _jumpStrong(self, bookIndex, chapter, section):
+        world = self.strongWorld
+        self._pushHistory()
+        world.selectedBookIndex = bookIndex
+        world.chapterCount = self._maxChapterFor(world, bookIndex)
+        chapter = max(1, min(chapter, world.chapterCount))
+        world.selectedChapter = chapter
+        world.expanded = set()
+        self.mode = world.readMode
+        h, w = self.stdscr.getmaxyx()
+        w = max(1, w)
+        world.readLines = self._buildStrongReadLines(w)
+        world.cacheKey = (bookIndex, chapter, frozenset(world.expanded))
+        world.cacheW = w
+        world.readScroll = self._scrollTargetRow(world.verseRow, section)
+
+    def _searchKindHere(self):
+        if self.mode in ("strong_books", "strong_chapters", "strong_read"):
+            return "strong"
+        if self.mode in ("search_input", "search_results"):
+            return self.searchKind
+        return "recovery"
+
+    def _openSearch(self):
+        kind = self._searchKindHere()
+        self._pushHistory()
+        if self.searchKind != kind:
+            self.searchKind = kind
+            self.searchQuery = ""
+            self.searchInputText = ""
+            self.searchResults = []
+            self.searchScroll = 0
+            self.searchIdx = 0
+        if self.searchQuery and self.searchResults:
+            self.mode = "search_results"
+        else:
+            self.mode = "search_input"
+
+
+    def _detectStorage(self):
+        path = resolveNoteDbPath()
+        if not path:
+            return
+        try:
+            conn = openNoteDb(path)
+        except sqlite3.Error:
+            return
+        self.noteConn = conn
+        self.noteDbPath = path
+        self.storageEnabled = True
+        self._loadSettings()
+
+    def _openNoteDb(self):
+        if self.noteConn is None and self.noteDbPath:
+            try:
+                self.noteConn = openNoteDb(self.noteDbPath)
+            except sqlite3.Error:
+                self.noteConn = None
+        return self.noteConn
+
+    def _loadSettings(self):
+        conn = self._openNoteDb()
+        if conn is None:
+            return
+        rows = conn.execute("SELECT key, value FROM settings").fetchall()
+        self.settings = {r["key"]: r["value"] for r in rows}
+        if self.settings.get("default_english") == "1":
+            self.showEn = True
+        elif self.settings.get("default_english") == "0":
+            self.showEn = False
+        if self.settings.get("default_outline") == "1":
+            self.showOutline = True
+        elif self.settings.get("default_outline") == "0":
+            self.showOutline = False
+
+    def _saveSetting(self, key, value):
+        conn = self._openNoteDb()
+        if conn is None:
+            self.statusMessage = "無法開啟設定資料庫"
+            return
+        conn.execute(
+            "INSERT INTO settings(key, value) VALUES(?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value),
+        )
+        conn.commit()
+        self.settings[key] = value
+
+    def _resetSettings(self):
+        conn = self._openNoteDb()
+        if conn is not None:
+            conn.execute("DELETE FROM settings")
+            conn.commit()
+        self.settings = {}
+        self.statusMessage = "已重設所有設定"
+
+    def _isTypingText(self):
+        return self.mode == "search_input" or (self.mode == "option" and self._optionEditing)
+
+    def _setCmdError(self, message):
+        self.cmdError = message
+
+    def run(self):
+        curses = self.curses
+        curses.curs_set(0)
+        try:
+            curses.mousemask(curses.ALL_MOUSE_EVENTS)
+            curses.mouseinterval(0)
+        except curses.error:
+            pass
+        self.stdscr.keypad(True)
+        try:
+            curses.start_color()
+            curses.use_default_colors()
+            curses.init_pair(colorOutline, curses.COLOR_YELLOW, -1)
+            curses.init_pair(colorFootnote, curses.COLOR_RED, -1)
+            curses.init_pair(colorSection, curses.COLOR_CYAN, -1)
+            curses.init_pair(colorSecondary, curses.COLOR_WHITE, -1)
+            curses.init_pair(colorHeader, curses.COLOR_BLACK, curses.COLOR_YELLOW)
+            curses.init_pair(colorHelp, curses.COLOR_BLACK, curses.COLOR_WHITE)
+            curses.init_pair(colorCmdLine, curses.COLOR_WHITE, -1)
+        except curses.error:
+            pass
+
+        while True:
+            self.draw()
+            try:
+                ch = self.stdscr.get_wch()
+            except curses.error:
+                continue
+            if not self.handleKey(ch):
+                break
+
+    def draw(self):
+        self.stdscr.erase()
+        h, w = self.stdscr.getmaxyx()
+        if self.mode == "confirm_quit":
+            drawMode = self._quitPromptFrom
+        elif self.mode == "confirm_option_reset":
+            drawMode = self._prevModeBeforeConfirm
+        else:
+            drawMode = self.mode
+        if drawMode == "books":
+            self._drawBooksFor(self.recoveryWorld, h, w)
+        elif drawMode == "chapters":
+            self._drawChaptersFor(self.recoveryWorld, h, w)
+        elif drawMode == "read":
+            self.drawRead(h, w)
+        elif drawMode == "search_input":
+            self.drawSearchInput(h, w)
+        elif drawMode == "search_results":
+            self.drawSearchResults(h, w)
+        elif drawMode == "strong_books":
+            self._drawBooksFor(self.strongWorld, h, w)
+        elif drawMode == "strong_chapters":
+            self._drawChaptersFor(self.strongWorld, h, w)
+        elif drawMode == "strong_read":
+            self.drawStrongRead(h, w)
+        elif drawMode == "help":
+            self.drawHelp(h, w)
+        elif drawMode == "option":
+            self.drawOption(h, w)
+        elif drawMode == "text_view":
+            self.drawTextView(h, w)
+        if self.mode == "confirm_quit":
+            self._drawConfirmPrompt(h, w, " 確定要離開程式嗎？(y/n) ")
+        elif self.mode == "confirm_option_reset":
+            self._drawConfirmPrompt(h, w, " 確定要重設所有設定嗎？(y/n) ")
+        self.drawStatus(h, w)
+        self.stdscr.refresh()
+
+    def _drawConfirmPrompt(self, h, w, text):
+        curses = self.curses
+        y = h // 2
+        x = max(0, (w - len(text)) // 2)
+        try:
+            self.stdscr.addstr(y, x, text[: max(0, w - 1)], curses.color_pair(colorHeader) | curses.A_BOLD)
+        except curses.error:
+            pass
+
+    def drawStatus(self, h, w):
+        curses = self.curses
+        if self.commandMode:
+            text = ":" + self.cmdBuffer
+            attr = curses.color_pair(colorCmdLine) | curses.A_BOLD
+            text = text[: max(0, w - 1)]
+            try:
+                self.stdscr.move(h - 1, 0)
+                self.stdscr.clrtoeol()
+                self.stdscr.addstr(h - 1, 0, text, attr)
+            except curses.error:
+                pass
+            return
+        if self.cmdError:
+            text = self.cmdError
+        else:
+            text = self.statusMessage or ""
+        text = text[: max(0, w - 1)]
+        try:
+            self.stdscr.addstr(h - 1, 0, text.ljust(w - 1), curses.color_pair(colorHelp))
+        except curses.error:
+            pass
+
+    def _title(self, text, w):
+        curses = self.curses
+        try:
+            self.stdscr.addstr(0, 0, fitWidth(text, w - 1), curses.color_pair(colorHeader) | curses.A_BOLD)
+        except curses.error:
+            pass
+
+    def _bookNameFor(self, world, bookIndex):
+        if world.kind == "strong":
+            return zhBookNames[bookIndex - 1]
+        return bookDisplayName(self.conn, bookIndex, "big5")
+
+    def _drawBooksFor(self, world, h, w):
+        curses = self.curses
+        self._title(world.booksTitle, w)
+        visible = h - 2
+        if world.bookIdx < world.bookScroll:
+            world.bookScroll = world.bookIdx
+        if world.bookIdx >= world.bookScroll + visible:
+            world.bookScroll = world.bookIdx - visible + 1
+
+        self.clickMap = {}
+        for rowI, (idx, name) in enumerate(world.books[world.bookScroll:world.bookScroll + visible]):
+            y = rowI + 1
+            testament = "舊約" if idx <= 39 else "新約"
+            label = f"{idx:>3}  {name}  ({testament})"
+            attr = curses.A_REVERSE if world.bookScroll + rowI == world.bookIdx else 0
+            try:
+                self.stdscr.addstr(y, 0, label[: w - 1].ljust(w - 1), attr)
+            except curses.error:
+                pass
+            self.clickMap[y] = (world.bookClickTag, world.bookScroll + rowI)
+
+    def _drawChaptersFor(self, world, h, w):
+        curses = self.curses
+        name = self._bookNameFor(world, world.selectedBookIndex)
+        self._title(f" {name}{world.chaptersTitleSuffix}", w)
+        visible = h - 2
+        cols = max(1, (w - 1) // 8)
+        self.clickMap = {}
+        for i in range(world.chapterCount):
+            row = i // cols
+            col = i % cols
+            y = row + 1 - world.chapterScroll
+            if y < 1 or y > h - 2:
+                continue
+            x = col * 8
+            label = f"第{i+1:>3}章"
+            attr = curses.A_REVERSE if i == world.chapterIdx else 0
+            try:
+                self.stdscr.addstr(y, x, label, attr)
+            except curses.error:
+                pass
+            self.clickMap[(y, col)] = (world.chapterClickTag, i)
+
+    def _buildReadLines(self, w):
+        curses = self.curses
+        bookIndex = self.recoveryWorld.selectedBookIndex
+        chapter = self.recoveryWorld.selectedChapter
+        langPrimary = "cuv_big5" if self.showCuv else "big5"
+        rows = self.source.chapterRows(bookIndex, chapter, langPrimary)
+        outlines = getOutlines(self.conn, langPrimary, bookIndex, chapter) if self.showOutline else {}
+        secondaryMap = {}
+        if self.showEn:
+            srows = self.source.chapterRows(bookIndex, chapter, "eng")
+            secondaryMap = {r["section"]: r["content"] for r in srows}
+
+        fnEnabled = self.showOutline
+        refsBySection = {}
+        if self.storageEnabled:
+            noteConn = self._openNoteDb()
+            if noteConn is not None:
+                for rr in noteConn.execute(
+                    "SELECT section, label, target_book, target_chapter, target_section FROM refs "
+                    "WHERE book=? AND chapter=? ORDER BY section, label",
+                    (bookIndex, chapter),
+                ).fetchall():
+                    refsBySection.setdefault(rr["section"], []).append(rr)
+
+        lines = []
+        verseRow = {}
+        indentUnit = "  "
+        for r in rows:
+            section = r["section"]
+            for o in outlines.get(section, []):
+                indent = indentUnit * (o["level"] - 1)
+                for wl in plainWrap(indent + o["outline"], w - 1):
+                    lines.append(Line([("".join(c for c, _ in wl), colorOutline | curses.A_BOLD, None)]))
+            fn = getFootnotes(self.conn, langPrimary, bookIndex, chapter, section) if fnEnabled else []
+            fnPairs = [(f["location"], f["seq"]) for f in fn]
+            chars = []
+            content = r["content"]
+            marks = {loc - 1: seq for loc, seq in fnPairs}
+            for i, c in enumerate(content):
+                if i in marks:
+                    for mc in str(marks[i]):
+                        chars.append((mc, colorFootnote))
+                chars.append((c, 0))
+            for rr in refsBySection.get(section, []):
+                target = (rr["target_book"], rr["target_chapter"], rr["target_section"])
+                chars.append((rr["label"], ("ref", target)))
+            prefix = f"{section:>3}  "
+            wrapped = wrapMarked([(c, 0) for c in prefix] + chars, w - 1)
+            verseRow[section] = len(lines)
+            for wi, wl in enumerate(wrapped):
+                segs = []
+                curFlag = None
+                buf = ""
+                for c, flag in wl:
+                    if flag != curFlag:
+                        if buf:
+                            segs.append(self._readSegment(buf, curFlag))
+                        buf = c
+                        curFlag = flag
+                    else:
+                        buf += c
+                if buf:
+                    segs.append(self._readSegment(buf, curFlag))
+                lines.append(Line(segs, section=section, clickable=True))
+
+            if self.showEn and section in secondaryMap:
+                for wl in plainWrap("     " + secondaryMap[section], w - 1):
+                    lines.append(Line([("".join(c for c, _ in wl), colorSecondary, None)], section=section))
+
+            if fnEnabled and section in self.recoveryWorld.expanded:
+                for f in fn:
+                    label = f"      [{f['seq']}] "
+                    for wl in plainWrap(label + (f["note"] or ""), w - 1):
+                        lines.append(Line([("".join(c for c, _ in wl), colorSecondary, None)]))
+            lines.append(Line([("", 0, None)]))
+        return lines, verseRow
+
+    @staticmethod
+    def _readSegment(text, flag):
+        if isinstance(flag, tuple) and flag and flag[0] == "ref":
+            return (text, colorSection, flag[1])
+        return (text, flag if isinstance(flag, int) else 0, None)
+
+    def drawRead(self, h, w):
+        curses = self.curses
+        world = self.recoveryWorld
+        name = bookDisplayName(self.conn, world.selectedBookIndex, "big5")
+        flags = []
+        if self.showEn:
+            flags.append("英文")
+        if self.showCuv:
+            flags.append("和合本")
+        flagS = ("　[" + "／".join(flags) + "]") if flags else ""
+        self._title(f" {name} 第{world.selectedChapter}章{flagS}", w)
+
+        cacheKey = (
+            world.selectedBookIndex,
+            world.selectedChapter,
+            self.showEn,
+            self.showCuv,
+            self.showOutline,
+            frozenset(world.expanded),
+        )
+        if cacheKey != world.cacheKey or w != world.cacheW:
+            world.readLines, world.verseRow = self._buildReadLines(w)
+            world.cacheKey = cacheKey
+            world.cacheW = w
+        visible = h - 2
+        maxScroll = max(0, len(world.readLines) - visible)
+        world.readScroll = max(0, min(world.readScroll, maxScroll))
+
+        self.clickMapRead = {}
+        self.clickMapReadRefs = {}
+        for rowI, line in enumerate(world.readLines[world.readScroll:world.readScroll + visible]):
+            y = rowI + 1
+            x = 0
+            regions = []
+            for text, attr, refTarget in line.segments:
+                color = curses.color_pair(attr & 0xF) if attr else 0
+                try:
+                    self.stdscr.addstr(y, x, text, color | (curses.A_BOLD if attr == (colorOutline | curses.A_BOLD) else 0))
+                except curses.error:
+                    pass
+                textWidth = sum(cwidth(c) for c in text)
+                if refTarget is not None:
+                    regions.append((x, x + textWidth, refTarget))
+                x += textWidth
+            if regions:
+                self.clickMapReadRefs[y] = regions
+            if line.clickable:
+                self.clickMapRead[y] = line.section
+
+    def drawSearchInput(self, h, w):
+        self._title(" 搜尋經文", w)
+        try:
+            self.stdscr.addstr(2, 0, "關鍵字：" + self.searchInputText)
+        except self.curses.error:
+            pass
+
+    def drawSearchResults(self, h, w):
+        curses = self.curses
+        self._title(f" 搜尋「{self.searchQuery}」共 {len(self.searchResults)} 筆", w)
+        visible = h - 2
+        if self.searchIdx < self.searchScroll:
+            self.searchScroll = self.searchIdx
+        if self.searchIdx >= self.searchScroll + visible:
+            self.searchScroll = self.searchIdx - visible + 1
+        self.clickMap = {}
+        for rowI, r in enumerate(self.searchResults[self.searchScroll:self.searchScroll + visible]):
+            y = rowI + 1
+            label = f"{r['acr']} {r['chapter']}:{r['section']}  {r['content']}"
+            attr = curses.A_REVERSE if self.searchScroll + rowI == self.searchIdx else 0
+            try:
+                self.stdscr.addstr(y, 0, fitWidth(label, w - 1), attr)
+            except curses.error:
+                pass
+            self.clickMap[y] = ("search_result", self.searchScroll + rowI)
+
+
+    def _openStrongConn(self):
+        if self.strongConn is None and self.strongBiblePath:
+            self.strongConn = _openSqliteSoft(self.strongBiblePath)
+        return self.strongConn
+
+    def _openDictConn(self):
+        if self.dictConn is None and self.dictPath:
+            self.dictConn = _openSqliteSoft(self.dictPath)
+        return self.dictConn
+
+    def _strongDefinitionLines(self, code):
+        if code in self.strongDefCache:
+            return self.strongDefCache[code]
+        if code in ("G0", "H0"):
+            lines = [f"[{code} 為佔位符，無對應字典資料]"]
+            self.strongDefCache[code] = lines
+            return lines
+        dconn = self._openDictConn()
+        if dconn is None:
+            lines = ["尚未偵測到 Strong 字典（.dct.mybible），無法查字義。"]
+            self.strongDefCache[code] = lines
+            return lines
+        row = StrongDictSource(dconn).lookup(code)
+        if not row:
+            lines = [f"查無 Strong 編號: {code}"]
+        else:
+            header = f"── Strong {row['word']} ──"
+            body = renderDictHtml(row["data"], color=False)
+            lines = [header] + body.split("\n")
+        self.strongDefCache[code] = lines
+        return lines
+
+    def _buildStrongReadLines(self, w):
+        world = self.strongWorld
+        bookIndex = world.selectedBookIndex
+        chapter = world.selectedChapter
+        conn = self._openStrongConn()
+        self._strongWordCodes = {}
+        world.verseRow = {}
+        lines = []
+        if conn is None:
+            lines.append(SegLine([("找不到 Strong 原文聖經模組", 0, None)]))
+            return lines
+
+        rows = CuvSource(conn).chapterRows(bookIndex, chapter)
+        if not rows:
+            lines.append(SegLine([("查無此章節", 0, None)]))
+            return lines
+
+        for r in rows:
+            verse = r["Verse"]
+            segments = splitStrongVerse(r["Scripture"])
+            prefix = f"{verse:>3}  "
+            chars = [(c, None) for c in prefix]
+            wordIdx = 0
+            for text, codes in segments:
+                if codes:
+                    wordIdx += 1
+                    key = (bookIndex, chapter, verse, wordIdx)
+                    self._strongWordCodes[key] = codes
+                    chars.extend((c, key) for c in text)
+                else:
+                    chars.extend((c, None) for c in text)
+
+            wrapped = wrapMarked(chars, w - 1)
+            world.verseRow[verse] = len(lines)
+            for wl in wrapped:
+                segs = []
+                curKey = "__NONE__"
+                buf = ""
+                for c, key in wl:
+                    if key != curKey:
+                        if buf:
+                            attr = 0
+                            if curKey != "__NONE__" and curKey is not None:
+                                attr = colorSection if curKey in world.expanded else colorFootnote
+                            segs.append((buf, attr, None if curKey == "__NONE__" else curKey))
+                        buf = c
+                        curKey = key
+                    else:
+                        buf += c
+                if buf:
+                    attr = 0
+                    if curKey != "__NONE__" and curKey is not None:
+                        attr = colorSection if curKey in world.expanded else colorFootnote
+                    segs.append((buf, attr, None if curKey == "__NONE__" else curKey))
+                lines.append(SegLine(segs, verse=verse))
+
+            for wi in range(1, wordIdx + 1):
+                key = (bookIndex, chapter, verse, wi)
+                if key not in world.expanded:
+                    continue
+                for code in self._strongWordCodes.get(key, []):
+                    for defLine in self._strongDefinitionLines(code):
+                        for wl2 in plainWrap("      " + defLine, w - 1):
+                            text = "".join(c for c, _ in wl2)
+                            lines.append(SegLine([(text, colorSecondary, None)]))
+
+            lines.append(SegLine([("", 0, None)]))
+        return lines
+
+    def drawStrongRead(self, h, w):
+        curses = self.curses
+        world = self.strongWorld
+        name = zhBookNames[world.selectedBookIndex - 1]
+        self._title(f" {name} 第{world.selectedChapter}章（原文 Strong）", w)
+
+        cacheKey = (
+            world.selectedBookIndex,
+            world.selectedChapter,
+            frozenset(world.expanded),
+        )
+        if cacheKey != world.cacheKey or w != world.cacheW:
+            world.readLines = self._buildStrongReadLines(w)
+            world.cacheKey = cacheKey
+            world.cacheW = w
+
+        visible = h - 2
+        maxScroll = max(0, len(world.readLines) - visible)
+        world.readScroll = max(0, min(world.readScroll, maxScroll))
+
+        self.clickMapStrongWords = {}
+        for rowI, line in enumerate(
+            world.readLines[world.readScroll:world.readScroll + visible]
+        ):
+            y = rowI + 1
+            x = 0
+            regions = []
+            for text, attr, key in line.segments:
+                color = curses.color_pair(attr & 0xF) if attr else 0
+                try:
+                    self.stdscr.addstr(y, x, text, color)
+                except curses.error:
+                    pass
+                textWidth = sum(cwidth(c) for c in text)
+                if key is not None:
+                    regions.append((x, x + textWidth, key))
+                x += textWidth
+            if regions:
+                self.clickMapStrongWords[y] = regions
+
+    def _keyBooksFor(self, world, ch):
+        curses = self.curses
+        n = len(world.books)
+        if ch in (curses.KEY_UP, ord("k")):
+            world.bookIdx = max(0, world.bookIdx - 1)
+        elif ch in (curses.KEY_DOWN, ord("j")):
+            world.bookIdx = min(n - 1, world.bookIdx + 1)
+        elif ch == curses.KEY_NPAGE or ch == ord(" "):
+            world.bookIdx = min(n - 1, world.bookIdx + self._pageStep())
+        elif ch == curses.KEY_PPAGE:
+            world.bookIdx = max(0, world.bookIdx - self._pageStep())
+        elif ch in (10, 13, curses.KEY_ENTER):
+            self._enterBookFor(world)
+        elif world.supportsSearch and ch == ord("/"):
+            self._openSearch()
+        elif ch in world.backKeys:
+            self._goBack()
+        return True
+
+    def _enterBookFor(self, world):
+        self._pushHistory()
+        world.selectedBookIndex = world.books[world.bookIdx][0]
+        world.chapterCount = self._maxChapterFor(world, world.selectedBookIndex)
+        world.chapterIdx = 0
+        world.chapterScroll = 0
+        self.mode = world.chaptersMode
+
+    def _keyChaptersFor(self, world, ch):
+        curses = self.curses
+        cols = max(1, (curses.COLS - 1) // 8) if hasattr(curses, "COLS") else 8
+        if ch in (curses.KEY_UP, ord("k")):
+            world.chapterIdx = max(0, world.chapterIdx - cols)
+        elif ch in (curses.KEY_DOWN, ord("j")):
+            world.chapterIdx = min(world.chapterCount - 1, world.chapterIdx + cols)
+        elif ch in (curses.KEY_LEFT, ord("h")):
+            world.chapterIdx = max(0, world.chapterIdx - 1)
+        elif ch in (curses.KEY_RIGHT, ord("l")):
+            world.chapterIdx = min(world.chapterCount - 1, world.chapterIdx + 1)
+        elif ch == curses.KEY_NPAGE or ch == ord(" "):
+            world.chapterIdx = min(
+                world.chapterCount - 1, world.chapterIdx + self._pageStep() * cols
+            )
+        elif ch == curses.KEY_PPAGE:
+            world.chapterIdx = max(0, world.chapterIdx - self._pageStep() * cols)
+        elif ch in (10, 13, curses.KEY_ENTER):
+            self._enterChapterFor(world)
+        elif world.supportsSearch and ch == ord("/"):
+            self._openSearch()
+        elif ch in (27, curses.KEY_BACKSPACE, 127, 8):
+            self._goBack()
+        return True
+
+    def _enterChapterFor(self, world):
+        self._pushHistory()
+        world.selectedChapter = world.chapterIdx + 1
+        world.readScroll = 0
+        world.expanded = set()
+        self.mode = world.readMode
+
+    def _keyStrongRead(self, ch):
+        curses = self.curses
+        world = self.strongWorld
+        if ch in (curses.KEY_UP, ord("k")):
+            world.readScroll = max(0, world.readScroll - 1)
+        elif ch in (curses.KEY_DOWN, ord("j")):
+            world.readScroll += 1
+        elif ch == curses.KEY_NPAGE or ch == ord(" "):
+            world.readScroll += self._pageStep()
+        elif ch == curses.KEY_PPAGE:
+            world.readScroll = max(0, world.readScroll - self._pageStep())
+        elif ch in (curses.KEY_LEFT, ord("h")):
+            if world.selectedChapter > 1:
+                world.selectedChapter -= 1
+                world.readScroll = 0
+                world.expanded = set()
+        elif ch in (curses.KEY_RIGHT, ord("l")):
+            if world.selectedChapter < world.chapterCount:
+                world.selectedChapter += 1
+                world.readScroll = 0
+                world.expanded = set()
+        elif ch in (ord("e"), ord("c"), ord("n")):
+            self.statusMessage = missingContentMsg
+        elif ch in (ord("y"), ord("Y")):
+            self._copyCurrentStrongVerse()
+        elif ch == ord("/"):
+            self._openSearch()
+        elif ch in (27, curses.KEY_BACKSPACE, 127, 8):
+            self._goBack()
+        return True
+
+    def _buildHelpLines(self):
+        lines = []
+        lines.append("↑↓／j k／PageUp／PageDown／Space 捲動本頁，按 b/B/Esc 或其他鍵關閉")
+        lines.append("")
+        lines.append("一般模式：")
+        lines.append("  ↑↓ 或 j k 移動／捲動，Enter 或滑鼠左鍵點擊 選取")
+        lines.append("  PageUp/PageDown 或 Space  整頁上下捲動（類似 w3m）")
+        lines.append("  讀經畫面 ←→ 切換上下章；e 英文對照；c 恢復本／和合本；n 大綱")
+        lines.append("  讀經畫面點擊經文或 Enter 對準該節  展開／收合該節註解")
+        lines.append("  y   複製目前經節　　/   搜尋全經文")
+        lines.append("  b 或 B   返回上一頁（含畫面／模式切換的完整紀錄）")
+        lines.append("  q   離開程式（詢問 y/n）　　Q   直接離開程式")
+        lines.append("  :   進入指令模式（類似 vim），可輸入以下指令")
+        if self.hasStrongBible:
+            lines.append("  s   快速切換到原文 Strong 畫面")
+        if self.hasDb:
+            lines.append("  r   快速切回恢復本畫面")
+        if self.storageEnabled:
+            lines.append("  o 或 O   開啟設定（同 :option）")
+        lines.append("")
+        lines.append("指令模式：")
+        lines.append("  :q                    結束程式 (Y/n)")
+        lines.append("  :Q                    直接結束程式")
+        lines.append("  :strong 或 :S         切換為 Strong 模式並跳至本章節")
+        lines.append("                        （不在章節內時跳至目錄）")
+        lines.append("  :recovery 或 :R       切換為恢復本，規則同上")
+        lines.append("  :strong genesis 1 1   切換至 Strong 模式並跳至指定書卷章節")
+        lines.append("                        （參數可只給部分：:strong 1／:strong 1 1）")
+        lines.append("  :recovery genesis 1 1 同上，切換至恢復本")
+        lines.append("  :1                    跳至本章指定節")
+        lines.append("  :1 1                  跳至本卷指定章節")
+        lines.append("  :genesis 1 1          跳至指定書卷章節")
+        lines.append("  :footnote 或 :F       顯示本節註解（參數規則同 :strong）")
+        lines.append("  :intro [書卷]         顯示書卷簡介（省略書卷則用目前書卷）")
+        lines.append("  :copy 或 :C           複製目前經文")
+        lines.append("  :copy 1 3-5 7         複製本章指定經節（x-y 連續／空白分隔不連續）")
+        lines.append("  :copy #1              複製本章指定節的註解")
+        lines.append("  :english on/off 或 :E 開關英文對照（不帶參數則切換）")
+        lines.append("  :outline on/off 或 :O 開關綱目及註解顯示（不帶參數則切換）")
+        lines.append("  :search 或 :find      在目前經文版本搜尋（可多字串，交集查詢）")
+        lines.append("  :search -e Christ     在英文經文搜尋")
+        lines.append("  :search a b --exclude c   同時含 a、b 後再扣除含 c 的結果")
+        lines.append("  按 / 搜尋             與 :search 同一套查詢邏輯（交集／-e／--exclude）")
+        lines.append("  Strong 畫面的搜尋     搜尋和合本（忽略標記與全形空格），不支援 -e")
+        lines.append("  :help                 顯示本說明")
+        lines.append("")
+        lines.append("　（註：:S 已配給 :strong、:R 已配給 :recovery，")
+        lines.append("　  :search／:reference 則另有 :find／:ref 簡寫）")
+        lines.append("")
+        if self.storageEnabled:
+            lines.append(f"儲存功能（已啟用，資料存於 {self.noteDbPath}）：")
+            lines.append("  :setup-storage        （已啟用，無需再次執行）")
+            lines.append("  :option               進入設定模式；一般模式 o/O 同此")
+            lines.append("  :option reset         重設所有設定 (Y/n)")
+            lines.append("  :note 或 :N           對目前經節做筆記（開啟外部編輯器）")
+            lines.append("  :note show            顯示目前經節的筆記（參數規則同 :strong）")
+            lines.append("  :bookmark／:M／:mark  將目前經節加入書籤")
+            lines.append("  :bookmark show        顯示所有書籤")
+            lines.append("  :reference 或 :ref    為目前經節加上指向本章指定節的串珠")
+            lines.append("  :reference 1          （同上，指向本章指定節）")
+            lines.append("  :reference genesis 1 1 genesis 2 2")
+            lines.append("                        在兩個完整經節之間建立串珠")
+            lines.append("                        （串珠顯示於經節後方 a,b,...，可點按跳轉）")
+        else:
+            lines.append("儲存功能尚未啟用：執行 :setup-storage 以啟用")
+            lines.append("設定／筆記／書籤／串珠功能（會在使用者資料目錄建立 bible-note.db，路徑可用 bible.py data 查看）")
+        lines.append("")
+        lines.append("新舊約書卷中英對照：")
+        for i, (zh, en) in enumerate(zip(zhBookNames, enBookNames), start=1):
+            lines.append(f"  {i:>2}  {zh:<6}{en}")
+        return lines
+
+    def _cmdHelp(self):
+        self.modeStack.append(self.mode)
+        self.helpScroll = 0
+        self._helpTextLines = self._buildHelpLines()
+        self.mode = "help"
+
+    def drawHelp(self, h, w):
+        self._title(" 說明", w)
+        visible = h - 2
+        lines = self._helpTextLines
+        maxScroll = max(0, len(lines) - visible)
+        self.helpScroll = max(0, min(self.helpScroll, maxScroll))
+        for i, l in enumerate(lines[self.helpScroll:self.helpScroll + visible]):
+            try:
+                self.stdscr.addstr(i + 1, 1, l[: max(0, w - 2)])
+            except self.curses.error:
+                pass
+
+    def drawOption(self, h, w):
+        curses = self.curses
+        self._title(" 設定 (Enter 編輯／儲存，Esc 取消編輯，b 返回)", w)
+        for i, (key, label) in enumerate(optionFields):
+            y = i + 1
+            if y > h - 2:
+                break
+            if self._optionEditing and i == self._optionFieldIdx:
+                line = f"{label}: {self._optionEditBuffer}"
+            else:
+                curVal = self.settings.get(key, "") or ""
+                line = f"{label}: {curVal}"
+            attr = curses.A_REVERSE if i == self._optionFieldIdx else 0
+            try:
+                self.stdscr.addstr(y, 0, line[: w - 1].ljust(w - 1), attr)
+            except curses.error:
+                pass
+
+    def _openTextView(self, title, bodyText):
+        self._pushHistory()
+        self._textViewTitle = title
+        self._textViewRaw = bodyText
+        self._textViewScroll = 0
+        self._textViewCacheW = None
+        self._textViewLines = []
+        self.mode = "text_view"
+
+    def drawTextView(self, h, w):
+        self._title(f" {self._textViewTitle}", w)
+        if w != self._textViewCacheW:
+            wrapped = []
+            for raw in self._textViewRaw.split("\n"):
+                if raw == "":
+                    wrapped.append("")
+                    continue
+                for wl in plainWrap(raw, max(1, w - 1)):
+                    wrapped.append("".join(c for c, _ in wl))
+            self._textViewLines = wrapped
+            self._textViewCacheW = w
+        lines = self._textViewLines
+        visible = h - 2
+        maxScroll = max(0, len(lines) - visible)
+        self._textViewScroll = max(0, min(self._textViewScroll, maxScroll))
+        for i, l in enumerate(lines[self._textViewScroll:self._textViewScroll + visible]):
+            try:
+                self.stdscr.addstr(i + 1, 0, l[: max(0, w - 1)])
+            except self.curses.error:
+                pass
+
+    def _keyTextView(self, ch):
+        curses = self.curses
+        if ch in (curses.KEY_UP, ord("k")):
+            self._textViewScroll = max(0, self._textViewScroll - 1)
+        elif ch in (curses.KEY_DOWN, ord("j")):
+            self._textViewScroll += 1
+        elif ch == curses.KEY_NPAGE or ch == ord(" "):
+            self._textViewScroll += self._pageStep()
+        elif ch == curses.KEY_PPAGE:
+            self._textViewScroll = max(0, self._textViewScroll - self._pageStep())
+        elif ch in (27, curses.KEY_BACKSPACE, 127, 8):
+            self._goBack()
+        return True
+
+    def _keyOption(self, ch):
+        curses = self.curses
+        if self._optionEditing:
+            if ch in (10, 13, curses.KEY_ENTER):
+                key, _label = optionFields[self._optionFieldIdx]
+                self._applyOptionValue(key, self._optionEditBuffer.strip())
+                self._optionEditing = False
+            elif ch == 27:
+                self._optionEditing = False
+            elif ch in (curses.KEY_BACKSPACE, 127, 8):
+                self._optionEditBuffer = self._optionEditBuffer[:-1]
+            elif 32 <= ch < 0x110000:
+                try:
+                    self._optionEditBuffer += chr(ch)
+                except ValueError:
+                    pass
+            return True
+        if ch in (curses.KEY_UP, ord("k")):
+            self._optionFieldIdx = max(0, self._optionFieldIdx - 1)
+        elif ch in (curses.KEY_DOWN, ord("j")):
+            self._optionFieldIdx = min(len(optionFields) - 1, self._optionFieldIdx + 1)
+        elif ch in (10, 13, curses.KEY_ENTER):
+            key, _label = optionFields[self._optionFieldIdx]
+            self._optionEditBuffer = self.settings.get(key, "") or ""
+            self._optionEditing = True
+        elif ch in (27, curses.KEY_BACKSPACE, 127, 8):
+            self._goBack()
+        return True
+
+    def _keyHelp(self, ch):
+        curses = self.curses
+        if ch in (curses.KEY_UP, ord("k")):
+            self.helpScroll = max(0, self.helpScroll - 1)
+        elif ch in (curses.KEY_DOWN, ord("j")):
+            self.helpScroll += 1
+        elif ch == curses.KEY_NPAGE or ch == ord(" "):
+            self.helpScroll += self._pageStep()
+        elif ch == curses.KEY_PPAGE:
+            self.helpScroll = max(0, self.helpScroll - self._pageStep())
+        else:
+            self.mode = self.modeStack.pop() if self.modeStack else "books"
+        return True
+
+
+    def _handleCommandModeKey(self, ch):
+        curses = self.curses
+        if ch in (10, 13, curses.KEY_ENTER):
+            cmdline = self.cmdBuffer
+            self.commandMode = False
+            self.cmdBuffer = ""
+            self._executeCommand(cmdline)
+            if self._wantQuit:
+                return False
+            return True
+        if ch == 27:
+            self.commandMode = False
+            self.cmdBuffer = ""
+            return True
+        if ch in (curses.KEY_BACKSPACE, 127, 8):
+            self.cmdBuffer = self.cmdBuffer[:-1]
+            return True
+        if 32 <= ch < 0x110000:
+            try:
+                self.cmdBuffer += chr(ch)
+            except ValueError:
+                pass
+            return True
+        return True
+
+    def _executeCommand(self, cmdline):
+        cmdline = cmdline.strip()
+        self.cmdError = None
+        if not cmdline:
+            return
+        tokens = cmdline.split()
+        head = tokens[0]
+        rest = tokens[1:]
+        headLower = head.lower()
+        try:
+            if head == "q":
+                self._quitPromptFrom = self.mode
+                self.mode = "confirm_quit"
+            elif head == "Q":
+                self._wantQuit = True
+            elif headLower == "strong" or head == "S":
+                self._cmdSwitchMode(rest, toStrong=True)
+            elif headLower == "recovery" or head == "R":
+                self._cmdSwitchMode(rest, toStrong=False)
+            elif headLower == "footnote" or head == "F":
+                self._cmdFootnote(rest)
+            elif headLower == "intro":
+                self._cmdIntro(rest)
+            elif headLower == "copy" or head == "C":
+                self._cmdCopy(rest)
+            elif headLower == "english" or head == "E":
+                self._cmdToggle(rest, "showEn", "英文對照")
+            elif headLower == "outline" or head == "O":
+                self._cmdToggle(rest, "showOutline", "綱目及註解")
+            elif headLower in ("search", "find"):
+                self._cmdSearch(rest)
+            elif headLower == "help":
+                self._cmdHelp()
+            elif headLower == "setup-storage":
+                self._cmdSetupStorage()
+            elif headLower == "option":
+                self._cmdOption(rest)
+            elif headLower == "note" or head == "N":
+                self._cmdNote(rest)
+            elif headLower in ("bookmark", "mark") or head == "M":
+                self._cmdBookmark(rest)
+            elif headLower in ("reference", "ref"):
+                self._cmdReference(rest)
+            else:
+                self._cmdGoto(tokens)
+        except Exception as e:
+            self.cmdError = f"指令執行錯誤: {e}"
+
+    def _cmdGoto(self, tokens):
+        inStrongWorld = self.mode.startswith("strong")
+        ctxBook, ctxChapter, _ = self._currentContextRef()
+        if ctxBook is None:
+            if inStrongWorld:
+                ctxBook, ctxChapter = self.strongWorld.selectedBookIndex, self.strongWorld.selectedChapter
+            else:
+                ctxBook, ctxChapter = self.recoveryWorld.selectedBookIndex, self.recoveryWorld.selectedChapter
+        try:
+            bookIndex, chapter, section = self._parseRefArgs(tokens, ctxBook, ctxChapter)
+        except ValueError as e:
+            self._setCmdError(str(e))
+            return
+        if inStrongWorld:
+            if not self.hasStrongBible:
+                self._setCmdError("找不到原文 Strong 聖經模組")
+                return
+            self._jumpStrong(bookIndex, chapter, section)
+        else:
+            if not self.hasDb:
+                self._setCmdError("找不到恢復本資料庫")
+                return
+            self._jumpRecovery(bookIndex, chapter, section)
+
+    def _cmdSwitchMode(self, tokens, toStrong):
+        if not tokens:
+            if self.mode == "read" and self.recoveryWorld.selectedBookIndex and self.recoveryWorld.selectedChapter:
+                ctxBook, ctxChapter = self.recoveryWorld.selectedBookIndex, self.recoveryWorld.selectedChapter
+            elif self.mode == "strong_read" and self.strongWorld.selectedBookIndex and self.strongWorld.selectedChapter:
+                ctxBook, ctxChapter = self.strongWorld.selectedBookIndex, self.strongWorld.selectedChapter
+            else:
+                ctxBook, ctxChapter = None, None
+            if ctxBook and ctxChapter:
+                if toStrong:
+                    if not self.hasStrongBible:
+                        self._setCmdError("找不到原文 Strong 聖經模組")
+                        return
+                    self._jumpStrong(ctxBook, ctxChapter, None)
+                else:
+                    if not self.hasDb:
+                        self._setCmdError("找不到恢復本資料庫")
+                        return
+                    self._jumpRecovery(ctxBook, ctxChapter, None)
+            else:
+                if toStrong and not self.hasStrongBible:
+                    self._setCmdError("找不到原文 Strong 聖經模組")
+                    return
+                if (not toStrong) and not self.hasDb:
+                    self._setCmdError("找不到恢復本資料庫")
+                    return
+                self._pushHistory()
+                self.mode = "strong_books" if toStrong else "books"
+            return
+        ctxBook, ctxChapter, _ = self._currentContextRef()
+        try:
+            bookIndex, chapter, section = self._parseRefArgs(tokens, ctxBook, ctxChapter)
+        except ValueError as e:
+            self._setCmdError(str(e))
+            return
+        if toStrong:
+            if not self.hasStrongBible:
+                self._setCmdError("找不到原文 Strong 聖經模組")
+                return
+            self._jumpStrong(bookIndex, chapter, section)
+        else:
+            if not self.hasDb:
+                self._setCmdError("找不到恢復本資料庫")
+                return
+            self._jumpRecovery(bookIndex, chapter, section)
+
+    def _cmdFootnote(self, tokens):
+        if not self.hasDb:
+            self._setCmdError(needRecoveryMsg)
+            return
+        if not tokens:
+            if self.mode == "read" and self.recoveryWorld.selectedBookIndex and self.recoveryWorld.selectedChapter:
+                section = self._currentReadSection()
+                if section is None:
+                    self._setCmdError("目前沒有可顯示註解的經節")
+                    return
+                self._forceExpandSection(section)
+                return
+            if self.mode == "strong_read" and self.strongWorld.selectedBookIndex and self.strongWorld.selectedChapter:
+                verse = self._currentStrongReadVerse()
+                if verse is None:
+                    self._setCmdError("目前沒有可顯示註解的經節")
+                    return
+                self._jumpRecovery(self.strongWorld.selectedBookIndex, self.strongWorld.selectedChapter, verse)
+                self._forceExpandSection(verse)
+                return
+            self._setCmdError("目前不在章節內，請提供完整卷章節")
+            return
+        ctxBook, ctxChapter, _ = self._currentContextRef()
+        try:
+            bookIndex, chapter, section = self._parseRefArgs(tokens, ctxBook, ctxChapter)
+        except ValueError as e:
+            self._setCmdError(str(e))
+            return
+        if section is None:
+            self._setCmdError("請指定節數")
+            return
+        self._jumpRecovery(bookIndex, chapter, section)
+        self._forceExpandSection(section)
+
+    def _cmdIntro(self, tokens):
+        if not self.hasDb:
+            self._setCmdError(needRecoveryMsg)
+            return
+        if tokens:
+            name = " ".join(tokens)
+            bookIndex = resolveAnyBookName(name, self.conn)
+            if bookIndex is None:
+                self._setCmdError(f"找不到書卷: {name}")
+                return
+        else:
+            bookIndex = self._currentAnyBook()
+            if bookIndex is None:
+                self._setCmdError("目前未選擇書卷")
+                return
+        bookName = bookDisplayName(self.conn, bookIndex, "big5")
+        rows = self.source.intros(bookIndex)
+        if not rows:
+            text = "（查無書卷簡介）"
+        else:
+            parts = []
+            for r in rows:
+                label = introTypeLabel.get(r["type"], f"type{r['type']}")
+                parts.append(f"{label}\n{r['intro']}")
+            text = "\n\n".join(parts)
+        self._openTextView(f"{bookName} 書卷簡介", text)
+
+    def _cmdCopy(self, tokens):
+        if not tokens:
+            if self.mode == "read":
+                self._copyCurrentVerse()
+            elif self.mode == "strong_read":
+                self._copyCurrentStrongVerse()
+            else:
+                self._setCmdError("目前沒有可複製的經節")
+            return
+        footnoteMode = tokens[0].startswith("#")
+        sections = []
+        for tok in tokens:
+            if footnoteMode != tok.startswith("#"):
+                self._setCmdError("請統一使用 # 前綴以複製註解，或省略以複製經文")
+                return
+            t = tok[1:] if footnoteMode else tok
+            try:
+                if "-" in t:
+                    a, b = t.split("-", 1)
+                    a, b = int(a), int(b)
+                    sections.extend(range(min(a, b), max(a, b) + 1))
+                else:
+                    sections.append(int(t))
+            except ValueError:
+                self._setCmdError("格式錯誤，請用 1 3-5 7 這樣的格式")
+                return
+        ctxBook, ctxChapter, _ = self._currentContextRef()
+        if ctxBook is None or ctxChapter is None:
+            self._setCmdError("目前不在章節內")
+            return
+        if footnoteMode:
+            self._copyFootnotesForSections(ctxBook, ctxChapter, sections)
+        else:
+            self._copyVersesForSections(ctxBook, ctxChapter, sections, fromStrong=(self.mode == "strong_read"))
+
+    def _cmdToggle(self, tokens, attrName, label):
+        if self.mode.startswith("strong"):
+            self._setCmdError(missingContentMsg)
+            return
+        if not tokens:
+            setattr(self, attrName, not getattr(self, attrName))
+        elif tokens[0].lower() == "on":
+            setattr(self, attrName, True)
+        elif tokens[0].lower() == "off":
+            setattr(self, attrName, False)
+        else:
+            self._setCmdError("請用 on 或 off，或不帶參數直接切換")
+            return
+        self.recoveryWorld.cacheKey = None
+        state = "開啟" if getattr(self, attrName) else "關閉"
+        self.statusMessage = f"已{state}{label}"
+
+    def _parseSearchTokens(self, tokens):
+        useEnglish = False
+        if tokens and tokens[0] == "-e":
+            useEnglish = True
+            tokens = tokens[1:]
+        includeTerms, excludeTerms = [], []
+        excludeMode = False
+        for tok in tokens:
+            if tok == "--exclude":
+                excludeMode = True
+                continue
+            (excludeTerms if excludeMode else includeTerms).append(tok)
+        if not includeTerms:
+            return None
+        return useEnglish, includeTerms, excludeTerms
+
+    def _searchLabel(self, includeTerms, excludeTerms):
+        label = "／".join(includeTerms)
+        if excludeTerms:
+            label += "　排除：" + "／".join(excludeTerms)
+        return label
+
+    def _execSearchQuery(self, useEnglish, includeTerms, excludeTerms):
+        lang = "eng" if useEnglish else ("cuv_big5" if self.showCuv else "big5")
+        results = self.source.search(lang, includeTerms, excludeTerms)
+        return self._searchLabel(includeTerms, excludeTerms), results
+
+    def _execStrongSearch(self, includeTerms, excludeTerms):
+        if self._cuvSearchSource is None:
+            self._cuvSearchSource = CuvSource(self._openStrongConn())
+        results = self._cuvSearchSource.search(includeTerms, excludeTerms)
+        return self._searchLabel(includeTerms, excludeTerms), results
+
+    def _searchUnavailable(self, kind, useEnglish=False):
+        if kind == "strong":
+            if not self.hasStrongBible or self._openStrongConn() is None:
+                return "找不到和合本資料庫"
+            if useEnglish:
+                return "和合本不含英文，-e 不適用"
+            return None
+        if not self.hasDb:
+            return "找不到恢復本資料庫"
+        return None
+
+    def _cmdSearch(self, tokens):
+        kind = self._searchKindHere()
+        parsed = self._parseSearchTokens(tokens)
+        problem = self._searchUnavailable(kind, bool(parsed and parsed[0]))
+        if problem:
+            self._setCmdError(problem)
+            return
+        if parsed is None:
+            self._setCmdError("請至少輸入一個搜尋字串")
+            return
+        useEnglish, includeTerms, excludeTerms = parsed
+        if kind == "strong":
+            label, results = self._execStrongSearch(includeTerms, excludeTerms)
+        else:
+            label, results = self._execSearchQuery(useEnglish, includeTerms, excludeTerms)
+        self._pushHistory()
+        self.searchKind = kind
+        self.searchInputText = " ".join(tokens)
+        self.searchQuery = label
+        self.searchResults = results
+        self.searchIdx = 0
+        self.searchScroll = 0
+        self.mode = "search_results"
+
+    def _cmdSetupStorage(self):
+        if self.storageEnabled:
+            self.statusMessage = "儲存功能已啟用"
+            return
+        try:
+            conn = openNoteDb(noteDbDefaultPath)
+        except sqlite3.Error as e:
+            self._setCmdError(f"無法建立儲存資料庫: {e}")
+            return
+        self.noteConn = conn
+        self.noteDbPath = noteDbDefaultPath
+        self.storageEnabled = True
+        self.statusMessage = f"已啟用儲存功能（{noteDbDefaultPath}）"
+
+    def _cmdOption(self, rest):
+        if not self.storageEnabled:
+            self._setCmdError("請先執行 :setup-storage 啟用儲存功能")
+            return
+        if rest and rest[0] == "reset":
+            self._prevModeBeforeConfirm = self.mode
+            self.mode = "confirm_option_reset"
+            return
+        self._pushHistory()
+        self.mode = "option"
+        self._optionFieldIdx = 0
+        self._optionEditing = False
+
+    def _applyOptionValue(self, key, value):
+        if key == "note_db_path" and value and value != self.noteDbPath:
+            try:
+                newConn = openNoteDb(value)
+            except sqlite3.Error as e:
+                self.statusMessage = f"無法開啟資料庫: {e}"
+                return
+            if self.noteConn is not None:
+                try:
+                    self.noteConn.close()
+                except sqlite3.Error:
+                    pass
+            self.noteConn = newConn
+            self.noteDbPath = value
+            writeNoteDbPointer(value)
+        self._saveSetting(key, value)
+        self.statusMessage = "已儲存設定"
+
+    def _cmdNote(self, tokens):
+        if not self.storageEnabled:
+            self._setCmdError("請先執行 :setup-storage 啟用儲存功能")
+            return
+        show = False
+        if tokens and tokens[0] == "show":
+            show = True
+            tokens = tokens[1:]
+        ctxBook, ctxChapter, ctxSection = self._currentContextRef()
+        try:
+            bookIndex, chapter, section = self._parseRefArgs(tokens, ctxBook, ctxChapter)
+        except ValueError as e:
+            self._setCmdError(str(e))
+            return
+        if section is None:
+            section = ctxSection
+        if section is None:
+            self._setCmdError("請指定節數")
+            return
+        if show:
+            self._showNote(bookIndex, chapter, section)
+        else:
+            self._editNote(bookIndex, chapter, section)
+
+    def _showNote(self, bookIndex, chapter, section):
+        conn = self._openNoteDb()
+        text = ""
+        if conn is not None:
+            row = conn.execute(
+                "SELECT note FROM notes WHERE book=? AND chapter=? AND section=?",
+                (bookIndex, chapter, section),
+            ).fetchone()
+            text = row["note"] if row else ""
+        bookName = zhBookNames[bookIndex - 1] if 1 <= bookIndex <= 66 else str(bookIndex)
+        self._openTextView(f"{bookName} {chapter}:{section} 筆記", text or "（尚無筆記）")
+
+    def _editNote(self, bookIndex, chapter, section):
+        conn = self._openNoteDb()
+        if conn is None:
+            self.statusMessage = "無法開啟筆記資料庫"
+            return
+        row = conn.execute(
+            "SELECT note FROM notes WHERE book=? AND chapter=? AND section=?",
+            (bookIndex, chapter, section),
+        ).fetchone()
+        existing = row["note"] if row else ""
+        editor = os.environ.get("EDITOR") or ("notepad" if isWindows else "nano")
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".txt", delete=False, encoding="utf-8"
+            ) as tf:
+                tf.write(existing)
+                tmpPath = tf.name
+        except OSError as e:
+            self.statusMessage = f"無法建立暫存筆記檔: {e}"
+            return
+        curses = self.curses
+        try:
+            curses.def_prog_mode()
+        except curses.error:
+            pass
+        curses.endwin()
+        editorOk = True
+        try:
+            subprocess.run([editor, tmpPath])
+        except (FileNotFoundError, OSError) as e:
+            editorOk = False
+            self.statusMessage = (
+                f"無法開啟編輯器 {editor}: {e}　"
+                f"（可設定環境變數 EDITOR 指定其他編輯器）"
+            )
+        finally:
+            try:
+                curses.reset_prog_mode()
+            except curses.error:
+                pass
+            self.stdscr.refresh()
+        if not editorOk:
+            try:
+                os.unlink(tmpPath)
+            except OSError:
+                pass
+            return
+        try:
+            with open(tmpPath, "r", encoding="utf-8") as f:
+                newText = f.read()
+        except OSError:
+            newText = existing
+        finally:
+            try:
+                os.unlink(tmpPath)
+            except OSError:
+                pass
+        newText = newText.rstrip("\n")
+        if newText.strip():
+            conn.execute(
+                "INSERT INTO notes(book, chapter, section, note) VALUES(?, ?, ?, ?) "
+                "ON CONFLICT(book, chapter, section) DO UPDATE SET note=excluded.note",
+                (bookIndex, chapter, section, newText),
+            )
+        else:
+            conn.execute(
+                "DELETE FROM notes WHERE book=? AND chapter=? AND section=?",
+                (bookIndex, chapter, section),
+            )
+        conn.commit()
+        self.statusMessage = "已儲存筆記"
+
+    def _cmdBookmark(self, tokens):
+        if not self.storageEnabled:
+            self._setCmdError("請先執行 :setup-storage 啟用儲存功能")
+            return
+        if tokens and tokens[0] == "show":
+            self._showBookmarks()
+            return
+        ctxBook, ctxChapter, ctxSection = self._currentContextRef()
+        if ctxBook is None or ctxChapter is None or ctxSection is None:
+            self._setCmdError("目前沒有可加入書籤的經節")
+            return
+        conn = self._openNoteDb()
+        if conn is None:
+            self.statusMessage = "無法開啟書籤資料庫"
+            return
+        conn.execute(
+            "INSERT INTO bookmarks(book, chapter, section, added_at) VALUES(?, ?, ?, ?) "
+            "ON CONFLICT(book, chapter, section) DO UPDATE SET added_at=excluded.added_at",
+            (ctxBook, ctxChapter, ctxSection, datetime.datetime.now().isoformat(timespec="seconds")),
+        )
+        conn.commit()
+        self.statusMessage = "已加入書籤"
+
+    def _showBookmarks(self):
+        conn = self._openNoteDb()
+        lines = []
+        if conn is not None:
+            rows = conn.execute(
+                "SELECT book, chapter, section, added_at FROM bookmarks ORDER BY book, chapter, section"
+            ).fetchall()
+            for r in rows:
+                bookName = zhBookNames[r["book"] - 1] if 1 <= r["book"] <= 66 else str(r["book"])
+                preview = self._versePreview(r["book"], r["chapter"], r["section"])
+                lines.append(f"{bookName} {r['chapter']}:{r['section']}　{preview}")
+        text = "\n".join(lines) if lines else "（尚無書籤）"
+        self._openTextView("書籤", text)
+
+    def _cmdReference(self, tokens):
+        if not self.storageEnabled:
+            self._setCmdError("請先執行 :setup-storage 啟用儲存功能")
+            return
+        if len(tokens) == 6:
+            try:
+                srcBook = resolveAnyBookName(tokens[0], self.conn if self.hasDb else None)
+                if srcBook is None:
+                    raise ValueError(f"找不到書卷: {tokens[0]}")
+                if not (tokens[1].isdigit() and tokens[2].isdigit()):
+                    raise ValueError("章節需為數字")
+                srcChapter, srcSection = int(tokens[1]), int(tokens[2])
+                tgtBook = resolveAnyBookName(tokens[3], self.conn if self.hasDb else None)
+                if tgtBook is None:
+                    raise ValueError(f"找不到書卷: {tokens[3]}")
+                if not (tokens[4].isdigit() and tokens[5].isdigit()):
+                    raise ValueError("章節需為數字")
+                tgtChapter, tgtSection = int(tokens[4]), int(tokens[5])
+            except ValueError as e:
+                self._setCmdError(str(e))
+                return
+        else:
+            ctxBook, ctxChapter, ctxSection = self._currentContextRef()
+            if ctxBook is None or ctxChapter is None or ctxSection is None:
+                self._setCmdError("目前沒有可加上串珠的經節")
+                return
+            try:
+                tgtBook, tgtChapter, tgtSection = self._parseRefArgs(tokens, ctxBook, ctxChapter)
+            except ValueError as e:
+                self._setCmdError(str(e))
+                return
+            if tgtSection is None:
+                self._setCmdError("請指定目標節數")
+                return
+            srcBook, srcChapter, srcSection = ctxBook, ctxChapter, ctxSection
+        conn = self._openNoteDb()
+        if conn is None:
+            self.statusMessage = "無法開啟串珠資料庫"
+            return
+        existing = conn.execute(
+            "SELECT label FROM refs WHERE book=? AND chapter=? AND section=?",
+            (srcBook, srcChapter, srcSection),
+        ).fetchall()
+        used = {r["label"] for r in existing}
+        label = None
+        for i in range(26):
+            cand = chr(ord("a") + i)
+            if cand not in used:
+                label = cand
+                break
+        if label is None:
+            self.statusMessage = "本節串珠已達上限"
+            return
+        conn.execute(
+            "INSERT INTO refs(book, chapter, section, label, target_book, target_chapter, target_section) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?)",
+            (srcBook, srcChapter, srcSection, label, tgtBook, tgtChapter, tgtSection),
+        )
+        conn.commit()
+        if self.mode == "read" and srcBook == self.recoveryWorld.selectedBookIndex and srcChapter == self.recoveryWorld.selectedChapter:
+            self.recoveryWorld.cacheKey = None
+        self.statusMessage = f"已加上串珠 {label}"
+
+    def handleKey(self, ch):
+        curses = self.curses
+        if isinstance(ch, str):
+            ch = ord(ch)
+        self.statusMessage = None
+        self.cmdError = None
+
+        if ch == curses.KEY_MOUSE:
+            if self.commandMode:
+                try:
+                    curses.getmouse()
+                except curses.error:
+                    pass
+                return True
+            try:
+                _, mx, my, _, bstate = curses.getmouse()
+            except curses.error:
+                if not hasattr(curses, "BUTTON5_PRESSED"):
+                    self._scrollCurrent(3)
+                return True
+            self._handleMouse(my, mx, bstate)
+            return True
+
+        if self.commandMode:
+            return self._handleCommandModeKey(ch)
+
+        if self.mode == "confirm_quit":
+            if ch in (ord("y"), ord("Y")):
+                return False
+            if ch in (ord("n"), ord("N"), 27):
+                self.mode = self._quitPromptFrom
+                self._quitPromptFrom = None
+            return True
+
+        if self.mode == "confirm_option_reset":
+            if ch in (ord("y"), ord("Y")):
+                self._resetSettings()
+                self.mode = self._prevModeBeforeConfirm or "books"
+                self._prevModeBeforeConfirm = None
+            elif ch in (ord("n"), ord("N"), 27):
+                self.mode = self._prevModeBeforeConfirm or "books"
+                self._prevModeBeforeConfirm = None
+            return True
+
+        if ch == ord("?") and self.mode != "help":
+            self._cmdHelp()
+            return True
+        if self.mode == "help":
+            return self._keyHelp(ch)
+
+        if ch == ord(":") and not self._isTypingText():
+            self.commandMode = True
+            self.cmdBuffer = ""
+            self.cmdError = None
+            return True
+
+        if ch == ord("Q") and not self._isTypingText():
+            return False
+        if ch == ord("q") and not self._isTypingText():
+            self._quitPromptFrom = self.mode
+            self.mode = "confirm_quit"
+            return True
+        if ch in (ord("b"), ord("B")) and not self._isTypingText():
+            self._goBack()
+            return True
+
+        if not self._isTypingText():
+            if ch in (ord("s"), ord("S")) and self.hasStrongBible and not self.mode.startswith("strong"):
+                self._pushHistory()
+                self.mode = "strong_books"
+                return True
+            if ch in (ord("r"), ord("R")) and self.hasDb and self.mode.startswith("strong"):
+                self._pushHistory()
+                self.mode = "books"
+                return True
+            if ch in (ord("o"), ord("O")) and self.storageEnabled and self.mode != "option":
+                self._cmdOption([])
+                return True
+
+        if self.mode == "books":
+            return self._keyBooksFor(self.recoveryWorld, ch)
+        elif self.mode == "chapters":
+            return self._keyChaptersFor(self.recoveryWorld, ch)
+        elif self.mode == "read":
+            return self._keyRead(ch)
+        elif self.mode == "search_input":
+            return self._keySearchInput(ch)
+        elif self.mode == "search_results":
+            return self._keySearchResults(ch)
+        elif self.mode == "strong_books":
+            return self._keyBooksFor(self.strongWorld, ch)
+        elif self.mode == "strong_chapters":
+            return self._keyChaptersFor(self.strongWorld, ch)
+        elif self.mode == "strong_read":
+            return self._keyStrongRead(ch)
+        elif self.mode == "option":
+            return self._keyOption(ch)
+        elif self.mode == "text_view":
+            return self._keyTextView(ch)
+        return True
+
+    def _handleMouse(self, y, x, bstate):
+        curses = self.curses
+        if bstate & getattr(curses, "BUTTON4_PRESSED", 0):
+            self._scrollCurrent(-3)
+            return
+        if bstate & getattr(curses, "BUTTON5_PRESSED", 0):
+            self._scrollCurrent(3)
+            return
+        clicked = bool(bstate & (curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED | curses.BUTTON1_DOUBLE_CLICKED))
+        if not clicked:
+            return
+        if self.mode == "books":
+            item = self.clickMap.get(y)
+            if item and item[0] == self.recoveryWorld.bookClickTag:
+                self.recoveryWorld.bookIdx = item[1]
+                self._enterBookFor(self.recoveryWorld)
+        elif self.mode == "chapters":
+            for key, item in self.clickMap.items():
+                if isinstance(key, tuple) and key[0] == y:
+                    self.recoveryWorld.chapterIdx = item[1]
+                    self._enterChapterFor(self.recoveryWorld)
+                    break
+        elif self.mode == "read":
+            refRegions = self.clickMapReadRefs.get(y)
+            jumped = False
+            if refRegions:
+                for xs, xe, target in refRegions:
+                    if xs <= x < xe:
+                        tb, tc, ts = target
+                        self._jumpRecovery(tb, tc, ts)
+                        jumped = True
+                        break
+            if not jumped:
+                section = self.clickMapRead.get(y)
+                if section is not None:
+                    self._toggleExpandSection(section)
+        elif self.mode == "search_results":
+            item = self.clickMap.get(y)
+            if item and item[0] == "search_result":
+                self.searchIdx = item[1]
+                self._gotoSearchResult()
+        elif self.mode == "strong_books":
+            item = self.clickMap.get(y)
+            if item and item[0] == self.strongWorld.bookClickTag:
+                self.strongWorld.bookIdx = item[1]
+                self._enterBookFor(self.strongWorld)
+        elif self.mode == "strong_chapters":
+            for key, item in self.clickMap.items():
+                if isinstance(key, tuple) and key[0] == y:
+                    self.strongWorld.chapterIdx = item[1]
+                    self._enterChapterFor(self.strongWorld)
+                    break
+        elif self.mode == "strong_read":
+            regions = self.clickMapStrongWords.get(y)
+            if regions:
+                for xs, xe, key in regions:
+                    if xs <= x < xe:
+                        expanded = self.strongWorld.expanded
+                        if key in expanded:
+                            expanded.discard(key)
+                        else:
+                            expanded.add(key)
+                        break
+
+    def _scrollCurrent(self, delta):
+        if self.mode == "books":
+            r = self.recoveryWorld
+            r.bookIdx = max(0, min(len(r.books) - 1, r.bookIdx + delta))
+        elif self.mode == "chapters":
+            self.recoveryWorld.chapterScroll = max(0, self.recoveryWorld.chapterScroll + delta)
+        elif self.mode == "read":
+            self.recoveryWorld.readScroll = max(0, self.recoveryWorld.readScroll + delta)
+        elif self.mode == "search_results":
+            self.searchIdx = max(0, min(len(self.searchResults) - 1, self.searchIdx + delta))
+        elif self.mode == "strong_books":
+            s = self.strongWorld
+            s.bookIdx = max(0, min(len(s.books) - 1, s.bookIdx + delta))
+        elif self.mode == "strong_chapters":
+            self.strongWorld.chapterScroll = max(0, self.strongWorld.chapterScroll + delta)
+        elif self.mode == "strong_read":
+            self.strongWorld.readScroll = max(0, self.strongWorld.readScroll + delta)
+        elif self.mode == "text_view":
+            self._textViewScroll = max(0, self._textViewScroll + delta)
+        elif self.mode == "help":
+            self.helpScroll = max(0, self.helpScroll + delta)
+
+    def _keyRead(self, ch):
+        curses = self.curses
+        world = self.recoveryWorld
+        if ch in (curses.KEY_UP, ord("k")):
+            world.readScroll = max(0, world.readScroll - 1)
+        elif ch in (curses.KEY_DOWN, ord("j")):
+            world.readScroll += 1
+        elif ch == curses.KEY_NPAGE or ch == ord(" "):
+            world.readScroll += self._pageStep()
+        elif ch == curses.KEY_PPAGE:
+            world.readScroll = max(0, world.readScroll - self._pageStep())
+        elif ch in (curses.KEY_LEFT, ord("h")):
+            if world.selectedChapter > 1:
+                world.selectedChapter -= 1
+                world.readScroll = 0
+                world.expanded = set()
+        elif ch in (curses.KEY_RIGHT, ord("l")):
+            if world.selectedChapter < world.chapterCount:
+                world.selectedChapter += 1
+                world.readScroll = 0
+                world.expanded = set()
+        elif ch == ord("e"):
+            self.showEn = not self.showEn
+        elif ch == ord("c"):
+            self.showCuv = not self.showCuv
+        elif ch == ord("n"):
+            self.showOutline = not self.showOutline
+        elif ch in (10, 13, curses.KEY_ENTER):
+            section = self._currentReadSection()
+            if section is not None:
+                self._toggleExpandSection(section)
+        elif ch in (ord("y"), ord("Y")):
+            self._copyCurrentVerse()
+        elif ch == ord("/"):
+            self._openSearch()
+        elif ch in (27, curses.KEY_BACKSPACE, 127, 8):
+            self._goBack()
+        return True
+
+    def _keySearchInput(self, ch):
+        curses = self.curses
+        if ch in (10, 13, curses.KEY_ENTER):
+            self._runSearch()
+            self.mode = "search_results"
+        elif ch == 27:
+            self._goBack()
+        elif ch in (curses.KEY_BACKSPACE, 127, 8):
+            self.searchInputText = self.searchInputText[:-1]
+        elif 32 <= ch < 0x110000:
+            try:
+                self.searchInputText += chr(ch)
+            except ValueError:
+                pass
+        return True
+
+    def _runSearch(self):
+        kind = self.searchKind
+        tokens = self.searchInputText.split()
+        parsed = self._parseSearchTokens(tokens)
+        problem = self._searchUnavailable(kind, bool(parsed and parsed[0]))
+        if problem:
+            self.statusMessage = problem
+            self.searchResults = []
+            return
+        if parsed is None:
+            self.searchResults = []
+            return
+        useEnglish, includeTerms, excludeTerms = parsed
+        if kind == "strong":
+            label, results = self._execStrongSearch(includeTerms, excludeTerms)
+        else:
+            label, results = self._execSearchQuery(useEnglish, includeTerms, excludeTerms)
+        self.searchQuery = label
+        self.searchResults = results
+        self.searchIdx = 0
+        self.searchScroll = 0
+
+    def _keySearchResults(self, ch):
+        curses = self.curses
+        if ch in (curses.KEY_UP, ord("k")):
+            self.searchIdx = max(0, self.searchIdx - 1)
+        elif ch in (curses.KEY_DOWN, ord("j")):
+            self.searchIdx = min(len(self.searchResults) - 1, self.searchIdx + 1)
+        elif ch == curses.KEY_NPAGE or ch == ord(" "):
+            self.searchIdx = min(len(self.searchResults) - 1, self.searchIdx + self._pageStep())
+        elif ch == curses.KEY_PPAGE:
+            self.searchIdx = max(0, self.searchIdx - self._pageStep())
+        elif ch in (10, 13, curses.KEY_ENTER):
+            self._gotoSearchResult()
+        elif ch == ord("/"):
+            self._pushHistory()
+            self.mode = "search_input"
+        elif ch in (27, curses.KEY_BACKSPACE, 127, 8):
+            self._goBack()
+        return True
+
+    def _gotoSearchResult(self):
+        if not self.searchResults:
+            return
+        r = self.searchResults[self.searchIdx]
+        if self.searchKind == "strong":
+            self._jumpStrong(r["book_index"], r["chapter"], r["section"])
+            return
+        self._pushHistory()
+        world = self.recoveryWorld
+        world.selectedBookIndex = r["book_index"]
+        world.chapterCount = self._maxChapterFor(world, world.selectedBookIndex)
+        world.selectedChapter = r["chapter"]
+        world.readScroll = 0
+        world.expanded = {r["section"]}
+        self.mode = "read"
