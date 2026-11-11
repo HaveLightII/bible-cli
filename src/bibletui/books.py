@@ -2,6 +2,8 @@
 
 import re
 
+from .sources.recovery import resolveBook
+
 
 zhBookNames = [
     "創世記", "出埃及記", "利未記", "民數記", "申命記",
@@ -86,3 +88,36 @@ def _buildBookAliasMap():
 
 
 bookAliasMap = _buildBookAliasMap()
+
+
+def resolveAnyBookName(name, conn=None):
+    if name is None:
+        return None
+    name = name.strip()
+    if not name:
+        return None
+    if name.isdigit():
+        idx = int(name)
+        return idx if 1 <= idx <= 66 else None
+    for i, n in enumerate(zhBookNames, start=1):
+        if n == name:
+            return i
+    norm = re.sub(r"\s+", "", name.lower())
+    for i, n in enumerate(enBookNames, start=1):
+        if re.sub(r"\s+", "", n.lower()) == norm:
+            return i
+    if conn is not None:
+        idx = resolveBook(conn, name)
+        if idx:
+            return idx
+    else:
+        idx = bookAliasMap.get(_normBookKey(name))
+        if idx:
+            return idx
+    matches = [i for i, n in enumerate(zhBookNames, start=1) if name in n]
+    if len(matches) == 1:
+        return matches[0]
+    matches = [i for i, n in enumerate(enBookNames, start=1) if norm and norm in re.sub(r"\s+", "", n.lower())]
+    if len(matches) == 1:
+        return matches[0]
+    return None
