@@ -71,130 +71,43 @@ import unicodedata
 from html.parser import HTMLParser
 
 from . import __version__
+from .paths import (
+    appDirName,
+    dataDirEnvName,
+    findSourceRoot,
+    scriptDir,
+    userDataDir,
+)
+from .resources import (
+    _sniffMybibleKind,
+    detectResources,
+    resolveResources,
+    resourceSearchDirs,
+)
+from .books import (
+    _buildBookAliasMap,
+    _normBookKey,
+    bookAliasEn,
+    bookAliasMap,
+    bookAliasZh,
+    enBookNames,
+    zhBookNames,
+)
+from .storage import (
+    findLegacyNoteDb,
+    legacyDeclinedPath,
+    legacyNoteDbPath,
+    legacyNoteDbPointerPath,
+    migrateLegacyNoteDb,
+    noteDbDefaultPath,
+    noteDbPointerPath,
+    noteSchemaVersion,
+    openNoteDb,
+    resolveNoteDbPath,
+    writeNoteDbPointer,
+)
 
 isWindows = os.name == "nt"
-
-
-
-def findSourceRoot():
-    root = os.path.abspath(os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), os.pardir, os.pardir
-    ))
-    if os.path.isfile(os.path.join(root, "pyproject.toml")) and os.path.isfile(
-        os.path.join(root, "bible.py")
-    ):
-        return root
-    return None
-
-
-scriptDir = findSourceRoot()
-
-dataDirEnvName = "BIBLE_CLI_DATA_DIR"
-appDirName = "bible-cli"
-
-
-def userDataDir(platform=None, env=None, home=None):
-    env = os.environ if env is None else env
-    platform = platform or sys.platform
-    home = home or os.path.expanduser("~")
-    override = env.get(dataDirEnvName)
-    if override:
-        return os.path.abspath(os.path.expanduser(override))
-    if platform.startswith("win"):
-        base = env.get("APPDATA") or os.path.join(home, "AppData", "Roaming")
-        return os.path.join(base, appDirName)
-    if platform == "darwin":
-        return os.path.join(home, "Library", "Application Support", appDirName)
-    xdg = env.get("XDG_DATA_HOME")
-    if not (xdg and os.path.isabs(xdg)):
-        xdg = os.path.join(home, ".local", "share")
-    return os.path.join(xdg, appDirName)
-
-
-def _sniffMybibleKind(path):
-    try:
-        c = sqlite3.connect(path)
-        tables = {
-            r[0] for r in c.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
-        }
-        c.close()
-    except sqlite3.Error:
-        return None
-    if "dictionary" in tables:
-        return "dict"
-    if "Bible" in tables:
-        return "bible"
-    return None
-
-
-def detectResources(baseDir=None):
-    baseDir = baseDir or scriptDir or os.getcwd()
-    resources = {"db": None, "dict": None, "strongBible": None}
-
-    dbPath = os.path.join(baseDir, "bible.db")
-    if os.path.isfile(dbPath):
-        resources["db"] = dbPath
-
-    try:
-        entries = sorted(os.listdir(baseDir))
-    except OSError:
-        entries = []
-
-    for fname in entries:
-        full = os.path.join(baseDir, fname)
-        if not os.path.isfile(full):
-            continue
-        lower = fname.lower()
-        if lower.endswith(".dct.mybible"):
-            resources["dict"] = resources["dict"] or full
-        elif lower.endswith(".bbl.mybible"):
-            resources["strongBible"] = resources["strongBible"] or full
-        elif lower.endswith(".mybible"):
-            kind = _sniffMybibleKind(full)
-            if kind == "dict":
-                resources["dict"] = resources["dict"] or full
-            elif kind == "bible":
-                resources["strongBible"] = resources["strongBible"] or full
-
-    return resources
-
-
-def resourceSearchDirs():
-    dirs = []
-    for d in (userDataDir(), scriptDir, os.getcwd()):
-        if not d:
-            continue
-        d = os.path.abspath(d)
-        if d not in dirs:
-            dirs.append(d)
-    return dirs
-
-
-def resolveResources(args=None, settings=None):
-    settings = settings or {}
-    found = {"db": None, "dict": None, "strongBible": None}
-    for d in resourceSearchDirs():
-        extra = detectResources(d)
-        found = {k: found[k] or extra[k] for k in found}
-    argDb = getattr(args, "db", None)
-    argDict = getattr(args, "dict", None)
-    argStrong = getattr(args, "strongbible", None)
-    chains = {
-        "db": ([argDb, settings.get("recovery_db_path"), found["db"]],
-               argDb or os.path.join(scriptDir or userDataDir(), "bible.db")),
-        "dict": ([argDict, os.environ.get("BIBLE_STRONG_DICT"),
-                  settings.get("dict_db_path"), found["dict"]],
-                 argDict or os.environ.get("BIBLE_STRONG_DICT")),
-        "strongBible": ([argStrong, os.environ.get("BIBLE_STRONG_BIBLE"),
-                         settings.get("strong_db_path"), found["strongBible"]],
-                        argStrong or os.environ.get("BIBLE_STRONG_BIBLE")),
-    }
-    resolved = {}
-    for key, (chain, fallback) in chains.items():
-        resolved[key] = next((p for p in chain if p and os.path.isfile(p)), fallback)
-    return resolved
 
 
 missingContentMsg = "此資料來源不含此內容"
@@ -217,90 +130,6 @@ cyan = "\033[36m"
 bold = "\033[1m"
 dim = "\033[2m"
 reset = "\033[0m"
-
-zhBookNames = [
-    "創世記", "出埃及記", "利未記", "民數記", "申命記",
-    "約書亞記", "士師記", "路得記", "撒母耳記上", "撒母耳記下",
-    "列王紀上", "列王紀下", "歷代志上", "歷代志下", "以斯拉記",
-    "尼希米記", "以斯帖記", "約伯記", "詩篇", "箴言",
-    "傳道書", "雅歌", "以賽亞書", "耶利米書", "耶利米哀歌",
-    "以西結書", "但以理書", "何西阿書", "約珥書", "阿摩司書",
-    "俄巴底亞書", "約拿書", "彌迦書", "那鴻書", "哈巴谷書",
-    "西番雅書", "哈該書", "撒迦利亞書", "瑪拉基書",
-    "馬太福音", "馬可福音", "路加福音", "約翰福音", "使徒行傳",
-    "羅馬書", "哥林多前書", "哥林多後書", "加拉太書", "以弗所書",
-    "腓立比書", "歌羅西書", "帖撒羅尼迦前書", "帖撒羅尼迦後書",
-    "提摩太前書", "提摩太後書", "提多書", "腓利門書", "希伯來書",
-    "雅各書", "彼得前書", "彼得後書", "約翰一書", "約翰二書",
-    "約翰三書", "猶大書", "啟示錄",
-]
-
-enBookNames = [
-    "Genesis", "Exodus", "Leviticus", "Numbers", "Deuteronomy",
-    "Joshua", "Judges", "Ruth", "1 Samuel", "2 Samuel",
-    "1 Kings", "2 Kings", "1 Chronicles", "2 Chronicles", "Ezra",
-    "Nehemiah", "Esther", "Job", "Psalms", "Proverbs",
-    "Ecclesiastes", "Song of Solomon", "Isaiah", "Jeremiah", "Lamentations",
-    "Ezekiel", "Daniel", "Hosea", "Joel", "Amos",
-    "Obadiah", "Jonah", "Micah", "Nahum", "Habakkuk",
-    "Zephaniah", "Haggai", "Zechariah", "Malachi",
-    "Matthew", "Mark", "Luke", "John", "Acts",
-    "Romans", "1 Corinthians", "2 Corinthians", "Galatians", "Ephesians",
-    "Philippians", "Colossians", "1 Thessalonians", "2 Thessalonians",
-    "1 Timothy", "2 Timothy", "Titus", "Philemon", "Hebrews",
-    "James", "1 Peter", "2 Peter", "1 John", "2 John",
-    "3 John", "Jude", "Revelation",
-]
-
-bookAliasZh = [
-    "創", "出", "利", "民", "申", "書", "士", "得", "撒上", "撒下",
-    "王上", "王下", "代上", "代下", "拉", "尼", "斯", "伯", "詩", "箴",
-    "傳", "歌", "賽", "耶", "哀", "結", "但", "何", "珥", "摩",
-    "俄", "拿", "彌", "鴻", "哈", "番", "該", "亞", "瑪",
-    "太", "可", "路", "約", "徒", "羅", "林前", "林後", "加", "弗",
-    "腓", "西", "帖前", "帖後", "提前", "提後", "多", "門", "來",
-    "雅", "彼前", "彼後", "約一", "約二", "約三", "猶", "啟",
-]
-
-bookAliasEn = [
-    ("gen", "gn"), ("ex", "exo", "exod"), ("lev", "lv"), ("num", "nu"),
-    ("deut", "dt", "deu"), ("josh", "jos"), ("judg", "jdg"), ("ru", "rth"),
-    ("1sam", "1sa"), ("2sam", "2sa"), ("1kgs", "1ki", "1kin"),
-    ("2kgs", "2ki", "2kin"), ("1chr", "1ch", "1chron"), ("2chr", "2ch", "2chron"),
-    ("ezr",), ("neh",), ("esth", "est"), ("jb",), ("ps", "psa", "psalm"),
-    ("prov", "pro"), ("eccl", "ecc", "eccles"), ("song", "sos", "sng", "songofsongs", "ss"),
-    ("isa", "is"), ("jer",), ("lam",), ("ezek", "eze"), ("dan", "dn"),
-    ("hos",), ("joel", "jl"), ("amos", "am"), ("obad", "oba", "ob"),
-    ("jon", "jnh"), ("mic",), ("nah", "na"), ("hab",), ("zeph", "zep"),
-    ("hag",), ("zech", "zec"), ("mal",),
-    ("matt", "mt", "mat"), ("mk", "mar"), ("lk", "luk"), ("jn", "joh"),
-    ("act",), ("rom", "ro"), ("1cor", "1co"), ("2cor", "2co"), ("gal",),
-    ("eph",), ("phil", "php", "phi"), ("col",), ("1thess", "1th", "1thes"),
-    ("2thess", "2th", "2thes"), ("1tim", "1ti"), ("2tim", "2ti"), ("tit",),
-    ("phlm", "phm", "philem"), ("heb",), ("jas", "jam"), ("1pet", "1pe", "1pt"),
-    ("2pet", "2pe", "2pt"), ("1jn", "1jo", "1joh"), ("2jn", "2jo", "2joh"),
-    ("3jn", "3jo", "3joh"), ("jd",), ("rev", "rv", "apoc"),
-]
-
-
-def _normBookKey(name):
-    return re.sub(r"[\s.]+", "", name.lower())
-
-
-def _buildBookAliasMap():
-    mapping = {}
-    for i, a in enumerate(bookAliasZh, start=1):
-        mapping[_normBookKey(a)] = i
-    for i, group in enumerate(bookAliasEn, start=1):
-        for a in group:
-            mapping.setdefault(_normBookKey(a), i)
-    extra = {"約壹": 62, "約貳": 63, "約參": 64}
-    for k, v in extra.items():
-        mapping.setdefault(k, v)
-    return mapping
-
-
-bookAliasMap = _buildBookAliasMap()
 
 colorOutline = 1
 colorFootnote = 2
@@ -1284,115 +1113,6 @@ class SegLine:
     def __init__(self, segments, verse=None):
         self.segments = segments
         self.verse = verse
-
-
-noteDbDefaultPath = os.path.join(userDataDir(), "bible-note.db")
-noteDbPointerPath = os.path.join(userDataDir(), "bible-note.db.path")
-legacyNoteDbPath = os.path.join(scriptDir, ".bible-note.db") if scriptDir else None
-legacyNoteDbPointerPath = os.path.join(scriptDir, ".bible-note.db.path") if scriptDir else None
-legacyDeclinedPath = os.path.join(userDataDir(), ".legacy-declined")
-noteSchemaVersion = 1
-
-
-def resolveNoteDbPath():
-    try:
-        with open(noteDbPointerPath, "r", encoding="utf-8") as f:
-            p = f.read().strip()
-    except OSError:
-        p = ""
-    if p and os.path.isfile(p):
-        return p
-    if os.path.isfile(noteDbDefaultPath):
-        return noteDbDefaultPath
-    return None
-
-
-def writeNoteDbPointer(value):
-    try:
-        os.makedirs(os.path.dirname(noteDbPointerPath), exist_ok=True)
-        with open(noteDbPointerPath, "w", encoding="utf-8") as f:
-            f.write(value)
-    except OSError:
-        pass
-
-
-def findLegacyNoteDb():
-    if not scriptDir:
-        return None
-    if resolveNoteDbPath() or os.path.exists(legacyDeclinedPath):
-        return None
-    if os.path.isfile(legacyNoteDbPath):
-        return ("copy", legacyNoteDbPath)
-    try:
-        with open(legacyNoteDbPointerPath, "r", encoding="utf-8") as f:
-            p = f.read().strip()
-    except OSError:
-        p = ""
-    if p and os.path.isfile(p):
-        return ("link", p)
-    return None
-
-
-def migrateLegacyNoteDb(askFunc=input, out=None):
-    out = out or sys.stderr
-    found = findLegacyNoteDb()
-    if not found:
-        return None
-    kind, src = found
-    if kind == "copy":
-        question = (f"偵測到舊版筆記資料庫：{src}\n"
-                    f"是否複製到 {noteDbDefaultPath}？（原檔會保留）[Y/n] ")
-    else:
-        question = (f"偵測到舊版筆記資料庫路徑設定：{src}\n"
-                    "是否沿用該檔案？[Y/n] ")
-    try:
-        answer = askFunc(question).strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        return None
-    try:
-        os.makedirs(os.path.dirname(noteDbDefaultPath), exist_ok=True)
-        if answer in ("", "y", "yes"):
-            if kind == "copy":
-                import shutil
-                shutil.copy2(src, noteDbDefaultPath)
-            else:
-                writeNoteDbPointer(src)
-            out.write("已完成筆記資料庫遷移。\n")
-            return "migrated"
-        with open(legacyDeclinedPath, "w", encoding="utf-8") as f:
-            f.write("declined\n")
-    except OSError as e:
-        out.write(f"遷移失敗: {e}\n")
-        return None
-    return "declined"
-
-
-def openNoteDb(path):
-    parent = os.path.dirname(os.path.abspath(path))
-    os.makedirs(parent, exist_ok=True)
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS notes "
-        "(book INTEGER, chapter INTEGER, section INTEGER, note TEXT, "
-        "PRIMARY KEY(book, chapter, section))"
-    )
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS bookmarks "
-        "(book INTEGER, chapter INTEGER, section INTEGER, added_at TEXT, "
-        "PRIMARY KEY(book, chapter, section))"
-    )
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS refs "
-        "(book INTEGER, chapter INTEGER, section INTEGER, label TEXT, "
-        "target_book INTEGER, target_chapter INTEGER, target_section INTEGER, "
-        "PRIMARY KEY(book, chapter, section, label))"
-    )
-    if conn.execute("PRAGMA user_version").fetchone()[0] == 0:
-        conn.execute(f"PRAGMA user_version = {noteSchemaVersion}")
-    conn.commit()
-    return conn
 
 
 optionFields = [
