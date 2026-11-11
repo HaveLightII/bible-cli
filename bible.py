@@ -410,6 +410,7 @@ class RecoverySource:
 class CuvSource:
     def __init__(self, conn):
         self.conn = conn
+        self._plain = None
 
     def maxChapter(self, bookIndex):
         row = self.conn.execute(
@@ -428,6 +429,33 @@ class CuvSource:
             "SELECT Scripture FROM Bible WHERE Book=? AND Chapter=? AND Verse=?",
             (bookIndex, chapter, verse),
         ).fetchone()
+
+    def plainVerses(self):
+        if self._plain is None:
+            rows = self.conn.execute(
+                "SELECT Book, Chapter, Verse, Scripture FROM Bible ORDER BY Book, Chapter, Verse"
+            ).fetchall()
+            self._plain = [
+                (r["Book"], r["Chapter"], r["Verse"], strongTagPattern.sub("", r["Scripture"]))
+                for r in rows
+            ]
+        return self._plain
+
+    def search(self, includeTerms, excludeTerms=()):
+        include = [t.replace("\u3000", "") for t in includeTerms]
+        exclude = [t.replace("\u3000", "") for t in excludeTerms]
+        results = []
+        for book, chapter, verse, text in self.plainVerses():
+            flat = text.replace("\u3000", "")
+            if all(t in flat for t in include) and not any(t in flat for t in exclude):
+                results.append({
+                    "book_index": book,
+                    "acr": zhBookNames[book - 1] if 1 <= book <= len(zhBookNames) else str(book),
+                    "chapter": chapter,
+                    "section": verse,
+                    "content": text,
+                })
+        return results
 
 
 class StrongDictSource:
@@ -1180,6 +1208,8 @@ class App:
         self.searchResults = []
         self.searchScroll = 0
         self.searchIdx = 0
+        self.searchKind = "restore"
+        self._cuvSearchSource = None
 
         self.strongWorld = World(
             kind="strong",
@@ -1192,7 +1222,7 @@ class App:
             chaptersMode="strong_chapters",
             readMode="strong_read",
             backKeys=(27, self.curses.KEY_BACKSPACE, 127, 8),
-            supportsSearch=False,
+            supportsSearch=True,
         )
         self._strongWordCodes = {}
         self.clickMapStrongWords = {}
@@ -1242,6 +1272,7 @@ class App:
     _NAV_KEYS = (
         "mode", "showEn", "showCuv", "showOutline",
         "searchQuery", "searchInputText", "searchResults", "searchScroll", "searchIdx",
+        "searchKind",
     )
 
     _WORLD_NAV_KEYS = (
@@ -1512,8 +1543,23 @@ class App:
         world.cacheW = w
         world.readScroll = world.verseRow.get(section, 0) if section else 0
 
+    def _searchKindHere(self):
+        if self.mode in ("strong_books", "strong_chapters", "strong_read"):
+            return "strong"
+        if self.mode in ("search_input", "search_results"):
+            return self.searchKind
+        return "restore"
+
     def _openSearch(self):
+        kind = self._searchKindHere()
         self._pushHistory()
+        if self.searchKind != kind:
+            self.searchKind = kind
+            self.searchQuery = ""
+            self.searchInputText = ""
+            self.searchResults = []
+            self.searchScroll = 0
+            self.searchIdx = 0
         if self.searchQuery and self.searchResults:
             self.mode = "search_results"
         else:
@@ -2127,6 +2173,8 @@ class App:
                 world.selectedChapter += 1
                 world.readScroll = 0
                 world.expanded = set()
+        elif ch == ord("/"):
+            self._openSearch()
         elif ch in (27, curses.KEY_BACKSPACE, 127, 8):
             self._goBack()
         return True
@@ -2174,6 +2222,7 @@ class App:
         lines.append("  :search -e Christ     在英文經文搜尋")
         lines.append("  :search a b --exclude c   同時含 a、b 後再扣除含 c 的結果")
         lines.append("  按 / 搜尋             與 :search 同一套查詢邏輯（交集／-e／--exclude）")
+        lines.append("  Strong 畫面的搜尋     搜尋和合本（忽略標記與全形空格），不支援 -e")
         lines.append("  :help                 顯示本說明")
         lines.append("")
         lines.append("　（註：:S 已配給 :strong、:R 已配給 :recovery，")
@@ -2596,25 +2645,51 @@ class App:
             return None
         return useEnglish, includeTerms, excludeTerms
 
-    def _execSearchQuery(self, useEnglish, includeTerms, excludeTerms):
-        lang = "eng" if useEnglish else ("cuv_big5" if self.showCuv else "big5")
-        results = self.source.search(lang, includeTerms, excludeTerms)
+    def _searchLabel(self, includeTerms, excludeTerms):
         label = "／".join(includeTerms)
         if excludeTerms:
             label += "　排除：" + "／".join(excludeTerms)
-        return label, results
+        return label
+
+    def _execSearchQuery(self, useEnglish, includeTerms, excludeTerms):
+        lang = "eng" if useEnglish else ("cuv_big5" if self.showCuv else "big5")
+        results = self.source.search(lang, includeTerms, excludeTerms)
+        return self._searchLabel(includeTerms, excludeTerms), results
+
+    def _execStrongSearch(self, includeTerms, excludeTerms):
+        if self._cuvSearchSource is None:
+            self._cuvSearchSource = CuvSource(self._openStrongConn())
+        results = self._cuvSearchSource.search(includeTerms, excludeTerms)
+        return self._searchLabel(includeTerms, excludeTerms), results
+
+    def _searchUnavailable(self, kind, useEnglish=False):
+        if kind == "strong":
+            if not self.hasStrongBible or self._openStrongConn() is None:
+                return "找不到和合本資料庫"
+            if useEnglish:
+                return "和合本不含英文，-e 不適用"
+            return None
+        if not self.hasDb:
+            return "找不到恢復本資料庫"
+        return None
 
     def _cmdSearch(self, tokens):
-        if not self.hasDb:
-            self._setCmdError("找不到恢復本資料庫")
-            return
+        kind = self._searchKindHere()
         parsed = self._parseSearchTokens(tokens)
+        problem = self._searchUnavailable(kind, bool(parsed and parsed[0]))
+        if problem:
+            self._setCmdError(problem)
+            return
         if parsed is None:
             self._setCmdError("請至少輸入一個搜尋字串")
             return
         useEnglish, includeTerms, excludeTerms = parsed
-        label, results = self._execSearchQuery(useEnglish, includeTerms, excludeTerms)
+        if kind == "strong":
+            label, results = self._execStrongSearch(includeTerms, excludeTerms)
+        else:
+            label, results = self._execSearchQuery(useEnglish, includeTerms, excludeTerms)
         self._pushHistory()
+        self.searchKind = kind
         self.searchInputText = " ".join(tokens)
         self.searchQuery = label
         self.searchResults = results
@@ -3122,16 +3197,22 @@ class App:
         return True
 
     def _runSearch(self):
-        if not self.hasDb:
-            self.searchResults = []
-            return
+        kind = self.searchKind
         tokens = self.searchInputText.split()
         parsed = self._parseSearchTokens(tokens)
+        problem = self._searchUnavailable(kind, bool(parsed and parsed[0]))
+        if problem:
+            self.statusMessage = problem
+            self.searchResults = []
+            return
         if parsed is None:
             self.searchResults = []
             return
         useEnglish, includeTerms, excludeTerms = parsed
-        label, results = self._execSearchQuery(useEnglish, includeTerms, excludeTerms)
+        if kind == "strong":
+            label, results = self._execStrongSearch(includeTerms, excludeTerms)
+        else:
+            label, results = self._execSearchQuery(useEnglish, includeTerms, excludeTerms)
         self.searchQuery = label
         self.searchResults = results
         self.searchIdx = 0
@@ -3159,8 +3240,11 @@ class App:
     def _gotoSearchResult(self):
         if not self.searchResults:
             return
-        self._pushHistory()
         r = self.searchResults[self.searchIdx]
+        if self.searchKind == "strong":
+            self._jumpStrong(r["book_index"], r["chapter"], r["section"])
+            return
+        self._pushHistory()
         world = self.restoreWorld
         world.selectedBookIndex = r["book_index"]
         world.chapterCount = self._maxChapterFor(world, world.selectedBookIndex)
