@@ -612,18 +612,19 @@ def printStrongDefinition(dictPath, code, color):
     print(renderDictHtml(row["data"], color=color))
 
 
-strongTagPattern = re.compile(r"<W([GH]\d+)>")
+strongTagPattern = re.compile(r"<W([GH]\d*)>")
 
 
 def splitStrongVerse(scripture):
-    parts = re.split(r"(<W[GH]\d+>)", scripture)
+    parts = re.split(r"(<W[GH]\d*>)", scripture)
     segments = []
     curText, curCodes = "", []
     first = True
     for part in parts:
         m = strongTagPattern.fullmatch(part)
         if m:
-            curCodes.append(m.group(1))
+            if len(m.group(1)) > 1:
+                curCodes.append(m.group(1))
         elif part == "":
             continue
         else:
