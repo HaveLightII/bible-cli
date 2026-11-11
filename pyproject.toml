@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bibletui"
+dynamic = ["version"]
+description = "聖經 CLI / TUI：恢復本、和合本與原文 Strong 對照"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    'windows-curses; sys_platform == "win32"',
+]
+
+[project.urls]
+Repository = "https://github.com/HaveLightII/bible-cli"
+
+[project.scripts]
+bible = "bibletui.cli:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "bibletui.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

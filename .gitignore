@@ -22,3 +22,6 @@ dist/
 *.swp
 baseline/
 baseline-*/
+build/
+*.egg-info/
+__pycache__/
