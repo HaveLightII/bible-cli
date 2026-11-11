@@ -15,14 +15,18 @@ bible.py — 恢復本聖經 CLI / TUI 合一版
     python3 bible.py orig <書卷> <章>[:節] [--word N]   # CLI：原文 Strong 對照
     python3 bible.py strong <G26|H157>                    # CLI：查單一 Strong 編號
 
-自動偵測（同目錄，即 bible.py 所在資料夾）：
+自動偵測（依序找 bible.py 所在資料夾、目前目錄）：
     - 找到 bible.db -> 提供恢復本功能（list/read/search/intro/note，以及互動 TUI）。
     - 找到 *.dct.mybible -> 提供 Strong 字典查詢（strong 指令、原文模式的 w/s 指令）。
     - 找到 *.bbl.mybible（或內含 Bible 表的 .mybible）-> 提供原文 Strong 對照（orig 指令、
       原文模式的 b 指令）。
     - 恢復本與原文 Strong 共用同一個 TUI 介面。若 bible.db 與 Strong 聖經模組同時存在，
-      不帶子指令啟動時直接進入恢復本畫面，可在任一畫面按 s 切換到原文 Strong 畫面，
-      在原文 Strong 畫面則按 r 切回恢復本（搜尋輸入畫面除外），也可用 --mode 直接指定。
+      不帶子指令啟動時直接進入和合本（原文 Strong）畫面，可在任一畫面按 s 切換到原文
+      Strong 畫面，在原文 Strong 畫面則按 r 切到恢復本（搜尋輸入畫面除外），也可用
+      --mode 直接指定；已存設定 default_mode 優先於上述預設。
+    - 資料檔路徑優先序：命令列參數（--db、--dict、--strongbible）、環境變數
+      （BIBLE_STRONG_DICT、BIBLE_STRONG_BIBLE）、已存設定（recovery_db_path、
+      dict_db_path、strong_db_path）、bible.py 所在資料夾、目前目錄。
     - 原文 Strong 讀經畫面中，經文裡標色的原文字可直接用滑鼠點按（或觸控點按）
       叫出／收合該字的 Strong 字義，顯示方式與恢復本點按經文展開註解相同。
 
@@ -118,9 +122,34 @@ def detectResources(baseDir=None):
     return resources
 
 
-detectedResources = detectResources()
+def resolveResources(args=None, settings=None):
+    settings = settings or {}
+    found = detectResources(scriptDir)
+    cwd = os.getcwd()
+    if os.path.abspath(cwd) != os.path.abspath(scriptDir):
+        extra = detectResources(cwd)
+        found = {k: found[k] or extra[k] for k in found}
+    argDb = getattr(args, "db", None)
+    argDict = getattr(args, "dict", None)
+    argStrong = getattr(args, "strongbible", None)
+    chains = {
+        "db": ([argDb, settings.get("recovery_db_path"), found["db"]],
+               argDb or os.path.join(scriptDir, "bible.db")),
+        "dict": ([argDict, os.environ.get("BIBLE_STRONG_DICT"),
+                  settings.get("dict_db_path"), found["dict"]],
+                 argDict or os.environ.get("BIBLE_STRONG_DICT")),
+        "strongBible": ([argStrong, os.environ.get("BIBLE_STRONG_BIBLE"),
+                         settings.get("strong_db_path"), found["strongBible"]],
+                        argStrong or os.environ.get("BIBLE_STRONG_BIBLE")),
+    }
+    resolved = {}
+    for key, (chain, fallback) in chains.items():
+        resolved[key] = next((p for p in chain if p and os.path.isfile(p)), fallback)
+    return resolved
 
-dbDefault = detectedResources["db"] or os.path.join(scriptDir, "bible.db")
+
+missingContentMsg = "此資料來源不含此內容"
+needRecoveryMsg = missingContentMsg + "（需要恢復本資料庫 bible.db）"
 
 zhLangs = ("big5", "gb", "cuv_big5", "cuv_gb")
 enLangs = ("eng", "darby_eng", "kjv_eng")
@@ -139,10 +168,6 @@ cyan = "\033[36m"
 bold = "\033[1m"
 dim = "\033[2m"
 reset = "\033[0m"
-
-dictDefault = os.environ.get("BIBLE_STRONG_DICT") or detectedResources["dict"]
-
-strongBibleDefault = os.environ.get("BIBLE_STRONG_BIBLE") or detectedResources["strongBible"]
 
 zhBookNames = [
     "創世記", "出埃及記", "利未記", "民數記", "申命記",
@@ -910,11 +935,11 @@ def buildParser():
     p.add_argument(
         "--version", action="version", version=f"bible.py {__version__}",
     )
-    p.add_argument("--db", default=dbDefault, help="sqlite 資料庫路徑")
+    p.add_argument("--db", default=None, help="sqlite 資料庫路徑")
     p.add_argument(
         "--mode", choices=["auto", "restore", "strong"], default="auto",
         help="不帶子指令時要啟動的介面："
-             "auto=依同目錄檔案自動判斷（兩者皆有時預設恢復本）、"
+             "auto=依偵測到的檔案自動判斷（兩者皆有時預設和合本）、"
              "restore=強制恢復本 TUI、strong=強制原文 Strong TUI",
     )
     sub = p.add_subparsers(dest="cmd")
@@ -955,7 +980,7 @@ def buildParser():
     )
     pStrong.add_argument("code", help="Strong 編號，例如 G26 或 H157")
     pStrong.add_argument(
-        "--dict", default=dictDefault,
+        "--dict", default=None,
         help="Strong 字典 .dct.mybible 檔案路徑（預設讀環境變數 BIBLE_STRONG_DICT）",
     )
     pStrong.set_defaults(func=cmdStrong)
@@ -967,12 +992,12 @@ def buildParser():
     pOrig.add_argument("book", help="書卷名（中／英文皆可），或 1-66 的編號")
     pOrig.add_argument("chapter", help="章數，或 章:節")
     pOrig.add_argument(
-        "--strongbible", default=strongBibleDefault,
+        "--strongbible", default=None,
         help="含 Strong 編號的聖經模組路徑，如 cuvt_bbl.mybible"
              "（預設讀環境變數 BIBLE_STRONG_BIBLE）",
     )
     pOrig.add_argument(
-        "--dict", default=dictDefault,
+        "--dict", default=None,
         help="配合 --word 查字義用，Strong 字典 .dct.mybible 路徑"
              "（預設讀環境變數 BIBLE_STRONG_DICT）",
     )
@@ -1495,7 +1520,7 @@ class App:
 
     def _copyFootnotesForSections(self, bookIndex, chapter, sections):
         if not self.hasDb:
-            self.statusMessage = "找不到恢復本資料庫，無法複製註解"
+            self.statusMessage = needRecoveryMsg
             return
         langPrimary = "cuv_big5" if self.showCuv else "big5"
         parts = []
@@ -2187,6 +2212,8 @@ class App:
                 world.selectedChapter += 1
                 world.readScroll = 0
                 world.expanded = set()
+        elif ch in (ord("e"), ord("c"), ord("n")):
+            self.statusMessage = missingContentMsg
         elif ch in (ord("y"), ord("Y")):
             self._copyCurrentStrongVerse()
         elif ch == ord("/"):
@@ -2537,7 +2564,7 @@ class App:
 
     def _cmdFootnote(self, tokens):
         if not self.hasDb:
-            self._setCmdError("找不到恢復本資料庫")
+            self._setCmdError(needRecoveryMsg)
             return
         if not tokens:
             if self.mode == "read" and self.restoreWorld.selectedBookIndex and self.restoreWorld.selectedChapter:
@@ -2571,7 +2598,7 @@ class App:
 
     def _cmdIntro(self, tokens):
         if not self.hasDb:
-            self._setCmdError("找不到恢復本資料庫")
+            self._setCmdError(needRecoveryMsg)
             return
         if tokens:
             name = " ".join(tokens)
@@ -2632,6 +2659,9 @@ class App:
             self._copyVersesForSections(ctxBook, ctxChapter, sections, fromStrong=(self.mode == "strong_read"))
 
     def _cmdToggle(self, tokens, attrName, label):
+        if self.mode.startswith("strong"):
+            self._setCmdError(missingContentMsg)
+            return
         if not tokens:
             setattr(self, attrName, not getattr(self, attrName))
         elif tokens[0].lower() == "on":
@@ -3464,25 +3494,15 @@ def _loadStoredSettingsDict():
 def launchInteractive(args, resources):
     storedSettings = _loadStoredSettingsDict()
 
-    dbPath = args.db if os.path.exists(args.db) else resources["db"]
-    if not (dbPath and os.path.exists(dbPath)):
-        storedDb = storedSettings.get("recovery_db_path")
-        if storedDb and os.path.exists(storedDb):
-            dbPath = storedDb
+    dbPath = resources["db"]
     hasDb = bool(dbPath and os.path.exists(dbPath))
 
     strongBiblePath = resources["strongBible"]
-    if not strongBiblePath:
-        storedStrong = storedSettings.get("strong_db_path")
-        if storedStrong and os.path.exists(storedStrong):
-            strongBiblePath = storedStrong
-    hasStrongBible = bool(strongBiblePath)
+    hasStrongBible = bool(strongBiblePath and os.path.exists(strongBiblePath))
 
     dictPath = resources["dict"]
-    if not dictPath:
-        storedDict = storedSettings.get("dict_db_path")
-        if storedDict and os.path.exists(storedDict):
-            dictPath = storedDict
+    if not (dictPath and os.path.exists(dictPath)):
+        dictPath = None
 
     mode = args.mode
     if mode == "auto":
@@ -3491,10 +3511,10 @@ def launchInteractive(args, resources):
             mode = "strong"
         elif stored == "restore" and hasDb:
             mode = "restore"
-        elif hasDb:
-            mode = "restore"
         elif hasStrongBible:
             mode = "strong"
+        elif hasDb:
+            mode = "restore"
         else:
             sys.stderr.write(
                 "在目前目錄找不到可用的聖經資料庫。\n"
@@ -3522,7 +3542,12 @@ def main():
     parser = buildParser()
     args = parser.parse_args()
 
-    resources = detectResources()
+    resources = resolveResources(args, _loadStoredSettingsDict())
+    args.db = resources["db"]
+    if hasattr(args, "dict"):
+        args.dict = resources["dict"]
+    if hasattr(args, "strongbible"):
+        args.strongbible = resources["strongBible"]
 
     if getattr(args, "cmd", None) is None:
         launchInteractive(args, resources)
