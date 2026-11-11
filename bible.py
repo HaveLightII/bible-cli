@@ -39,8 +39,11 @@ bible.py — 恢復本聖經 CLI / TUI 合一版
       差集查詢，按 / 的搜尋與此指令共用同一套邏輯）、:reference / :ref。
       裸的 :1、:1 1、:genesis 1 1 用於直接跳至指定節／章節／書卷章節。
     - 一般模式仍保留 q/Q 離開、b/B 返回上一頁（含畫面與模式切換的完整紀錄）。
-    - 預設不寫入任何檔案；執行 :setup-storage 後才會在本檔案所在目錄建立
-      .bible-note.db，並啟用 :option（設定，一般模式 o/O 同義）、:note／:N（筆記）、
+    - 預設不寫入任何檔案；執行 :setup-storage 後才會在使用者資料目錄建立
+      bible-note.db（Windows 為 %APPDATA%\\bible-cli，macOS 為
+      ~/Library/Application Support/bible-cli，其他為 $XDG_DATA_HOME/bible-cli
+      或 ~/.local/share/bible-cli；可用環境變數 BIBLE_CLI_DATA_DIR 覆寫），
+      並啟用 :option（設定，一般模式 o/O 同義）、:note／:N（筆記）、
       :bookmark／:M（書籤）、:reference（串珠，顯示於經節後方 a、b、c...，可點按跳轉）
       等指令；下次啟動只要偵測到該檔案仍在，即自動視為已啟用。
 
@@ -70,6 +73,27 @@ __version__ = "0.0.1"
 isWindows = os.name == "nt"
 
 scriptDir = os.path.dirname(os.path.abspath(__file__))
+
+dataDirEnvName = "BIBLE_CLI_DATA_DIR"
+appDirName = "bible-cli"
+
+
+def userDataDir(platform=None, env=None, home=None):
+    env = os.environ if env is None else env
+    platform = platform or sys.platform
+    home = home or os.path.expanduser("~")
+    override = env.get(dataDirEnvName)
+    if override:
+        return os.path.abspath(os.path.expanduser(override))
+    if platform.startswith("win"):
+        base = env.get("APPDATA") or os.path.join(home, "AppData", "Roaming")
+        return os.path.join(base, appDirName)
+    if platform == "darwin":
+        return os.path.join(home, "Library", "Application Support", appDirName)
+    xdg = env.get("XDG_DATA_HOME")
+    if not (xdg and os.path.isabs(xdg)):
+        xdg = os.path.join(home, ".local", "share")
+    return os.path.join(xdg, appDirName)
 
 
 def _sniffMybibleKind(path):
@@ -122,12 +146,20 @@ def detectResources(baseDir=None):
     return resources
 
 
+def resourceSearchDirs():
+    dirs = []
+    for d in (userDataDir(), scriptDir, os.getcwd()):
+        d = os.path.abspath(d)
+        if d not in dirs:
+            dirs.append(d)
+    return dirs
+
+
 def resolveResources(args=None, settings=None):
     settings = settings or {}
-    found = detectResources(scriptDir)
-    cwd = os.getcwd()
-    if os.path.abspath(cwd) != os.path.abspath(scriptDir):
-        extra = detectResources(cwd)
+    found = {"db": None, "dict": None, "strongBible": None}
+    for d in resourceSearchDirs():
+        extra = detectResources(d)
         found = {k: found[k] or extra[k] for k in found}
     argDb = getattr(args, "db", None)
     argDict = getattr(args, "dict", None)
@@ -630,6 +662,26 @@ def renderDictHtml(htmlText, color=True):
     return parser.getText()
 
 
+def cmdData(args, _conn):
+    resources = resolveResources(args, _loadStoredSettingsDict())
+    labels = (
+        ("db", "恢復本 bible.db"),
+        ("strongBible", "和合本/Strong 模組 .bbl.mybible"),
+        ("dict", "Strong 字典 .dct.mybible"),
+    )
+    print(f"使用者資料目錄: {userDataDir()}")
+    print("資料庫搜尋順序（前者優先）:")
+    for d in resourceSearchDirs():
+        print(f"  {d}")
+    print("偵測結果:")
+    for key, label in labels:
+        p = resources.get(key)
+        print(f"  {label}: {p if p and os.path.isfile(p) else '（未找到）'}")
+    notePath = resolveNoteDbPath()
+    print(f"筆記資料庫: {notePath or '（未啟用）'}")
+    print(f"預設筆記資料庫位置: {noteDbDefaultPath}")
+
+
 def cmdStrong(args, _conn):
     code = normalizeStrongCode(args.code)
     if not code:
@@ -1012,6 +1064,9 @@ def buildParser():
     )
     pOrig.set_defaults(func=cmdOrig)
 
+    pData = sub.add_parser("data", help="顯示資料目錄與偵測到的資料庫")
+    pData.set_defaults(func=cmdData)
+
     return p
 
 
@@ -1110,11 +1165,88 @@ class SegLine:
         self.verse = verse
 
 
-noteDbDefaultPath = os.path.join(scriptDir, ".bible-note.db")
-noteDbPointerPath = os.path.join(scriptDir, ".bible-note.db.path")
+noteDbDefaultPath = os.path.join(userDataDir(), "bible-note.db")
+noteDbPointerPath = os.path.join(userDataDir(), "bible-note.db.path")
+legacyNoteDbPath = os.path.join(scriptDir, ".bible-note.db")
+legacyNoteDbPointerPath = os.path.join(scriptDir, ".bible-note.db.path")
+legacyDeclinedPath = os.path.join(userDataDir(), ".legacy-declined")
+noteSchemaVersion = 1
+
+
+def resolveNoteDbPath():
+    try:
+        with open(noteDbPointerPath, "r", encoding="utf-8") as f:
+            p = f.read().strip()
+    except OSError:
+        p = ""
+    if p and os.path.isfile(p):
+        return p
+    if os.path.isfile(noteDbDefaultPath):
+        return noteDbDefaultPath
+    return None
+
+
+def writeNoteDbPointer(value):
+    try:
+        os.makedirs(os.path.dirname(noteDbPointerPath), exist_ok=True)
+        with open(noteDbPointerPath, "w", encoding="utf-8") as f:
+            f.write(value)
+    except OSError:
+        pass
+
+
+def findLegacyNoteDb():
+    if resolveNoteDbPath() or os.path.exists(legacyDeclinedPath):
+        return None
+    if os.path.isfile(legacyNoteDbPath):
+        return ("copy", legacyNoteDbPath)
+    try:
+        with open(legacyNoteDbPointerPath, "r", encoding="utf-8") as f:
+            p = f.read().strip()
+    except OSError:
+        p = ""
+    if p and os.path.isfile(p):
+        return ("link", p)
+    return None
+
+
+def migrateLegacyNoteDb(askFunc=input, out=None):
+    out = out or sys.stderr
+    found = findLegacyNoteDb()
+    if not found:
+        return None
+    kind, src = found
+    if kind == "copy":
+        question = (f"偵測到舊版筆記資料庫：{src}\n"
+                    f"是否複製到 {noteDbDefaultPath}？（原檔會保留）[Y/n] ")
+    else:
+        question = (f"偵測到舊版筆記資料庫路徑設定：{src}\n"
+                    "是否沿用該檔案？[Y/n] ")
+    try:
+        answer = askFunc(question).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return None
+    try:
+        os.makedirs(os.path.dirname(noteDbDefaultPath), exist_ok=True)
+        if answer in ("", "y", "yes"):
+            if kind == "copy":
+                import shutil
+                shutil.copy2(src, noteDbDefaultPath)
+            else:
+                writeNoteDbPointer(src)
+            out.write("已完成筆記資料庫遷移。\n")
+            return "migrated"
+        with open(legacyDeclinedPath, "w", encoding="utf-8") as f:
+            f.write("declined\n")
+    except OSError as e:
+        out.write(f"遷移失敗: {e}\n")
+        return None
+    return "declined"
 
 
 def openNoteDb(path):
+    parent = os.path.dirname(os.path.abspath(path))
+    os.makedirs(parent, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
@@ -1134,6 +1266,8 @@ def openNoteDb(path):
         "target_book INTEGER, target_chapter INTEGER, target_section INTEGER, "
         "PRIMARY KEY(book, chapter, section, label))"
     )
+    if conn.execute("PRAGMA user_version").fetchone()[0] == 0:
+        conn.execute(f"PRAGMA user_version = {noteSchemaVersion}")
     conn.commit()
     return conn
 
@@ -1145,7 +1279,7 @@ optionFields = [
     ("default_mode", "預設啟動模式 (recovery 或 strong)"),
     ("default_english", "預設顯示英文對照 (1 或 0)"),
     ("default_outline", "預設顯示綱目及註解 (1 或 0)"),
-    ("note_db_path", "筆記資料庫路徑 (.bible-note.db)"),
+    ("note_db_path", "筆記資料庫路徑 (bible-note.db)"),
 ]
 
 
@@ -1618,17 +1752,7 @@ class App:
 
 
     def _detectStorage(self):
-        path = None
-        if os.path.isfile(noteDbDefaultPath):
-            path = noteDbDefaultPath
-        elif os.path.isfile(noteDbPointerPath):
-            try:
-                with open(noteDbPointerPath, "r", encoding="utf-8") as f:
-                    p = f.read().strip()
-            except OSError:
-                p = ""
-            if p and os.path.isfile(p):
-                path = p
+        path = resolveNoteDbPath()
         if not path:
             return
         try:
@@ -2301,7 +2425,7 @@ class App:
             lines.append("                        （串珠顯示於經節後方 a,b,...，可點按跳轉）")
         else:
             lines.append("儲存功能尚未啟用：執行 :setup-storage 以啟用")
-            lines.append("設定／筆記／書籤／串珠功能（會在本程式所在目錄建立 .bible-note.db）")
+            lines.append("設定／筆記／書籤／串珠功能（會在使用者資料目錄建立 bible-note.db，路徑可用 bible.py data 查看）")
         lines.append("")
         lines.append("新舊約書卷中英對照：")
         for i, (zh, en) in enumerate(zip(zhBookNames, enBookNames), start=1):
@@ -2798,11 +2922,7 @@ class App:
                     pass
             self.noteConn = newConn
             self.noteDbPath = value
-            try:
-                with open(noteDbPointerPath, "w", encoding="utf-8") as f:
-                    f.write(value)
-            except OSError:
-                pass
+            writeNoteDbPointer(value)
         self._saveSetting(key, value)
         self.statusMessage = "已儲存設定"
 
@@ -3483,17 +3603,7 @@ def runStrongRepl(strongBiblePath, dictPath, canSwitchToRecovery=False):
 
 
 def _loadStoredSettingsDict():
-    path = None
-    if os.path.isfile(noteDbDefaultPath):
-        path = noteDbDefaultPath
-    elif os.path.isfile(noteDbPointerPath):
-        try:
-            with open(noteDbPointerPath, "r", encoding="utf-8") as f:
-                p = f.read().strip()
-        except OSError:
-            p = ""
-        if p and os.path.isfile(p):
-            path = p
+    path = resolveNoteDbPath()
     if not path:
         return {}
     try:
@@ -3531,8 +3641,10 @@ def launchInteractive(args, resources):
             mode = "recovery"
         else:
             sys.stderr.write(
-                "在目前目錄找不到可用的聖經資料庫。\n"
-                "請確認同目錄下存在 bible.db（恢復本）或 .mybible 檔案（Strong 原文模組）。\n"
+                "找不到可用的聖經資料庫。\n"
+                "請將 bible.db（恢復本）或 .mybible 檔案放在使用者資料目錄、"
+                "程式所在目錄或目前目錄，\n"
+                "並可執行 `bible.py data` 查看搜尋位置與偵測結果。\n"
             )
             sys.exit(1)
     elif mode == "recovery" and not hasDb:
@@ -3564,10 +3676,16 @@ def main():
         args.strongbible = resources["strongBible"]
 
     if getattr(args, "cmd", None) is None:
+        if sys.stdin.isatty():
+            if migrateLegacyNoteDb():
+                resources = resolveResources(args, _loadStoredSettingsDict())
+                args.db = resources["db"]
+                args.dict = resources["dict"]
+                args.strongbible = resources["strongBible"]
         launchInteractive(args, resources)
         return
 
-    if args.cmd in ("strong", "orig"):
+    if args.cmd in ("strong", "orig", "data"):
         args.func(args, None)
         return
 
