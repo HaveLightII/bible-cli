@@ -44,7 +44,7 @@
 
 只有 `cuvt.bbl.mybible` 就能啟動；加上 `strong_lite.dct.mybible` 可查 Strong 字義；加上 `bible.db` 才有恢復本、大綱、註解、書卷簡介與英文對照。
 
-`strong_lite.dct.mybible` 的版權聲明與散布條件記載於該檔 `details` 表的 `comments` 欄位，使用與轉散布時請一併遵守。
+`strong_lite.dct.mybible` 的版權聲明與散布條件記載於該檔 `details` 表的 `comments` 欄位（摘要見 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)），使用與轉散布時請一併遵守。
 
 
 ### 安裝資料檔案
@@ -97,7 +97,7 @@
 
 ## 版本
 
-目前版本：0.0.1（`bible --version`）。下一個目標版本為 0.1.0，變更內容見 [CHANGELOG.md](CHANGELOG.md)。
+目前版本：0.1.0（`bible --version`），變更內容見 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 資料目錄與偵測順序
 
@@ -286,4 +286,4 @@ GitHub Actions 會在 Linux、macOS、Windows 與 Python 3.10 至 3.14 上執行
 
 ## License
 
-以 [MIT 授權](LICENSE) 發布。本倉庫不含任何聖經資料庫，資料檔案各自的授權請見「資料檔案」章節。
+以 [MIT 授權](LICENSE) 發布。本倉庫不含任何聖經資料庫，資料檔案各自的授權請見「資料檔案」章節與 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

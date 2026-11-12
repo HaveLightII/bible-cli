@@ -2,7 +2,11 @@
 
 版本號依 [Semantic Versioning](https://semver.org/lang/zh-TW/)。
 
-## [Unreleased] - 目標 0.1.0
+## [Unreleased]
+
+## [0.1.0] - 2026-11-12
+
+首次公開發布。以下為自 0.0.1 以來的變更。
 
 ### 已完成（階段 1 至 4，已合併到 `main`）
 
@@ -33,10 +37,15 @@
 - 和合本 `cuvt.bbl.mybible` 不再由 README 提供下載連結，改指引自行從 MySword 官方網站或應用程式取得（README 新增「取得和合本」）；Strong 字典的連結不變
 - `bible data install`：`.mybible` 改為檢查資料表結構，SHA-256 與作者版本不同時只警告、不再拒絕（`--force` 只用於目標已存在且內容不同時覆蓋）；可直接安裝 MySword 網站的 `.gz` 壓縮檔
 
+### 發布準備（階段 9b）
+
+- 新增 `THIRD_PARTY_NOTICES.md`，載明 Strong 字典的版權聲明與散布條件，以及和合本、恢復本的資料來源說明
+- 新增 `.github/workflows/release.yml`：推送 `v*` 標籤時建置並以 PyPI Trusted Publishing 發布，建置時檢查標籤與套件版本一致
+- 版本改為 0.1.0，補上 `pyproject.toml` 的關鍵字、分類與專案連結
+
 ### 計畫中
 
 - 確認 CI 在各平台與 Python 版本全數通過，必要時調整支援範圍
-- 發布 0.1.0（GitHub release，PyPI 視情況）
 - 視需求：curses 不可用時的純文字後備、單檔執行檔
 
 ## [0.0.1] - 基準版本
