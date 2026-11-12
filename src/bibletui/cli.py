@@ -26,6 +26,7 @@ from .constants import (
     reset,
     zhLangs,
 )
+from .install import findInDir, installOne
 from .paths import userDataDir
 from .render import (
     insertFootnoteMarkers,
@@ -81,6 +82,34 @@ def cmdData(args, _conn):
     notePath = resolveNoteDbPath()
     print(f"筆記資料庫: {notePath or '（未啟用）'}")
     print(f"預設筆記資料庫位置: {noteDbDefaultPath}")
+
+
+def cmdDataInstall(args, _conn):
+    sources = list(args.fromFile or [])
+    if args.fromDir:
+        found = findInDir(args.fromDir)
+        if not found:
+            sys.stderr.write(
+                f"{args.fromDir}: 找不到可安裝的檔案"
+                "（cuvt.bbl.mybible、strong_lite.dct.mybible、bible.db）\n"
+            )
+            sys.exit(2)
+        sources.extend(found)
+    if not sources:
+        sys.stderr.write("請以 --from-dir 或 --from-file 指定要安裝的檔案。\n")
+        sys.exit(2)
+    destDir = userDataDir()
+    failed = 0
+    for src in sources:
+        status, message = installOne(src, destDir, force=args.force)
+        if status == "error":
+            failed += 1
+            sys.stderr.write(message + "\n")
+        else:
+            print(message)
+    print(f"安裝目錄: {destDir}")
+    if failed:
+        sys.exit(1)
 
 
 def cmdStrong(args, _conn):
@@ -444,8 +473,24 @@ def buildParser():
     )
     pOrig.set_defaults(func=cmdOrig)
 
-    pData = sub.add_parser("data", help="顯示資料目錄與偵測到的資料庫")
+    pData = sub.add_parser("data", help="顯示資料目錄與偵測到的資料庫；install 安裝資料檔")
     pData.set_defaults(func=cmdData)
+    dataSub = pData.add_subparsers(dest="dataCmd")
+    pInstall = dataSub.add_parser(
+        "install", help="驗證後把資料檔複製到使用者資料目錄（不連網）"
+    )
+    pInstall.add_argument(
+        "--from-dir", dest="fromDir", default=None,
+        help="含 cuvt.bbl.mybible、strong_lite.dct.mybible、bible.db 的資料夾",
+    )
+    pInstall.add_argument(
+        "--from-file", dest="fromFile", action="append", default=[],
+        help="單一資料檔路徑，可重複指定",
+    )
+    pInstall.add_argument(
+        "--force", action="store_true", help="SHA-256 不符或目標已存在時仍安裝",
+    )
+    pInstall.set_defaults(func=cmdDataInstall)
 
     return p
 
@@ -454,7 +499,8 @@ noDatabaseMsg = (
     "找不到可用的聖經資料庫。\n"
     "請將 bible.db（恢復本）或 .mybible 檔案放在使用者資料目錄或目前目錄"
     "（從原始碼執行時也包含 bible.py 所在目錄），\n"
-    "並可執行 `bible.py data` 查看搜尋位置與偵測結果。\n"
+    "並可執行 `bible.py data` 查看搜尋位置與偵測結果；"
+    "下載資料檔後可用 `data install --from-dir <資料夾>` 安裝。\n"
 )
 
 
