@@ -39,7 +39,7 @@
 | `cuvt.bbl.mybible` | 和合本（含 Strong 編號），沒有恢復本時的預設經文 | （連結待補） | `946ad2a51d6666a7df6ebb9fc753f0f05a9fbf371730f39ee8e4e5ac5a8f37ec` |
 | `strong_lite.dct.mybible` | Strong 字典 | （連結待補） | `077b01dc7c3bab17d8497993016b4e72b1b5c637571a7cc0df323910a6df3cd5` |
 
-若 `bible.db` 以分割檔提供，可使用 `./tools/merge_db.sh` 合併。
+若 `bible.db` 以分割檔提供，可使用 `./bin/merge_db.sh` 合併。
 
 只有 `cuvt.bbl.mybible` 就能啟動；加上 `strong_lite.dct.mybible` 可查 Strong 字義；加上 `bible.db` 才有恢復本、大綱、註解、書卷簡介與英文對照。
 
