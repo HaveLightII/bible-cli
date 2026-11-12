@@ -26,24 +26,36 @@
 
 **資料來源：** `bible.db`（恢復本內容，選用）、MySword 格式的 `.dct.mybible`（Strong 字典）與 `.bbl.mybible`（含 Strong 編號的和合本）
 
-**本倉庫不附帶任何資料庫檔案，請依下方「資料檔案」章節的連結自行下載，並確認符合各自的授權條款。**
+**本倉庫不附帶任何資料庫檔案。和合本與 Strong 字典請依下方「資料檔案」章節的連結自行下載；恢復本 `bible.db` 不提供下載，請依「取得恢復本資料庫」自行取得。使用前請確認符合各自的授權條款。**
 
 
 ## 資料檔案
 
-下列檔案不納入版本控制（已列入 `.gitignore`），請下載後放在 `bible.py` 同一個目錄，或下方「資料目錄與偵測順序」列出的其他位置：
+下列檔案不納入版本控制（已列入 `.gitignore`），請取得後放在 `bible.py` 同一個目錄，或下方「資料目錄與偵測順序」列出的其他位置：
 
 | 檔案 | 用途 | 下載連結 | SHA-256 |
 | :--- | :--- | :--- | :--- |
-| `bible.db` | 恢復本內容（選用） | （連結待補） | `1ef6a0fbf1434a0fc27757afbcf73f92e5d7a893d4556d5b067caabce39dab7d` |
-| `cuvt.bbl.mybible` | 和合本（含 Strong 編號），沒有恢復本時的預設經文 | （連結待補） | `946ad2a51d6666a7df6ebb9fc753f0f05a9fbf371730f39ee8e4e5ac5a8f37ec` |
-| `strong_lite.dct.mybible` | Strong 字典 | （連結待補） | `077b01dc7c3bab17d8497993016b4e72b1b5c637571a7cc0df323910a6df3cd5` |
+| `bible.db` | 恢復本內容（選用） | 不提供，見「取得恢復本資料庫」 | `1ef6a0fbf1434a0fc27757afbcf73f92e5d7a893d4556d5b067caabce39dab7d` |
+| `cuvt.bbl.mybible` | 和合本（含 Strong 編號），沒有恢復本時的預設經文 | [Google Drive 資料夾](https://drive.google.com/drive/folders/1X1sSrIra8it3SX0nDbnuU_4PVSLj1_kt) | `946ad2a51d6666a7df6ebb9fc753f0f05a9fbf371730f39ee8e4e5ac5a8f37ec` |
+| `strong_lite.dct.mybible` | Strong 字典 | [Google Drive 資料夾](https://drive.google.com/drive/folders/1X1sSrIra8it3SX0nDbnuU_4PVSLj1_kt) | `077b01dc7c3bab17d8497993016b4e72b1b5c637571a7cc0df323910a6df3cd5` |
 
-若 `bible.db` 以分割檔提供，可使用 `./bin/merge_db.sh` 合併。
+`bible.db` 欄位的 SHA-256 是作者所用版本的雜湊，僅供參考；自行取得的檔案可能因應用程式版本不同而不同。若取得的 `bible.db` 是分割檔，可使用 `./bin/merge_db.sh` 合併。
 
 只有 `cuvt.bbl.mybible` 就能啟動；加上 `strong_lite.dct.mybible` 可查 Strong 字義；加上 `bible.db` 才有恢復本、大綱、註解、書卷簡介與英文對照。
 
 `strong_lite.dct.mybible` 的版權聲明與散布條件記載於該檔 `details` 表的 `comments` 欄位，使用與轉散布時請一併遵守。
+
+
+### 取得恢復本資料庫
+
+恢復本內容有版權，本專案不散布。作者使用的 `bible.db` 來自官方 Play 商店版應用程式：資料庫存放在應用程式的私有目錄，可用 adb 取出。大致流程如下，實際路徑與可行的方法依裝置與應用程式版本而異，本文件不保證特定路徑或方法：
+
+1. 在電腦安裝 Android 平台工具（adb），手機開啟開發人員選項與 USB 偵錯。
+2. 以 adb 取得應用程式私有目錄中的資料庫檔案（一般裝置需要 root 或應用程式允許備份）。
+3. 以 `sqlite3 bible.db ".tables"` 確認含有 `content`、`footnote`、`outline`、`book_intro`、`book_name` 等資料表。
+4. 將檔案命名為 `bible.db`，放進資料目錄（見下方「資料目錄與偵測順序」），或以 `bible data` 查看偵測結果。
+
+請自行確認取得與使用方式符合該應用程式的使用條款與著作權規定。沒有 `bible.db` 時，程式仍可用和合本與 Strong 字典。
 
 
 ## 版本
