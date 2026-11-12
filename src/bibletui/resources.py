@@ -2,19 +2,19 @@
 
 import os
 import sqlite3
+from contextlib import closing
 
 from .paths import scriptDir, userDataDir
 
 
 def _sniffMybibleKind(path):
     try:
-        c = sqlite3.connect(path)
-        tables = {
-            r[0] for r in c.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
-        }
-        c.close()
+        with closing(sqlite3.connect(path)) as c:
+            tables = {
+                r[0] for r in c.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
     except sqlite3.Error:
         return None
     if "dictionary" in tables:

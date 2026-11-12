@@ -2,6 +2,7 @@ import gzip
 import os
 import sqlite3
 import unittest
+from unittest import mock
 
 import fixtures
 from bibletui import install as ins
@@ -94,6 +95,27 @@ class InstallUnitTests(fixtures.TempCase):
         self.assertEqual(status, "error")
         self.assertIn("解壓縮失敗", msg)
         self.assertEqual(os.listdir(self.dest), [])
+
+    def test_sniffAndHasTablesCloseConnectionOnError(self):
+        junk = os.path.join(self.tmp, "junk.db")
+        with open(junk, "wb") as f:
+            f.write(b"not sqlite")
+        opened = []
+        real = sqlite3.connect
+
+        def spy(*args, **kwargs):
+            c = real(*args, **kwargs)
+            opened.append(c)
+            return c
+
+        with mock.patch.object(sqlite3, "connect", spy):
+            self.assertIsNone(ins._sniffMybibleKind(junk))
+            self.assertFalse(ins.hasTables(junk, ["Bible"]))
+        self.assertEqual(len(opened), 2)
+        for c in opened:
+            with self.assertRaises(sqlite3.ProgrammingError):
+                c.execute("SELECT 1")
+        os.remove(junk)
 
     def test_gzCustomModuleKeepsName(self):
         custom = os.path.join(self.files, "my.bbl.mybible")

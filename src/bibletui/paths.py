@@ -1,6 +1,8 @@
 """資料目錄與原始碼根目錄的路徑判斷。"""
 
+import ntpath
 import os
+import posixpath
 import sys
 
 
@@ -41,11 +43,11 @@ def userDataDir(platform=None, env=None, home=None):
     if override:
         return os.path.abspath(os.path.expanduser(override))
     if platform.startswith("win"):
-        base = env.get("APPDATA") or os.path.join(home, "AppData", "Roaming")
-        return os.path.join(base, appDirName)
+        base = env.get("APPDATA") or ntpath.join(home, "AppData", "Roaming")
+        return ntpath.join(base, appDirName)
     if platform == "darwin":
-        return os.path.join(home, "Library", "Application Support", appDirName)
+        return posixpath.join(home, "Library", "Application Support", appDirName)
     xdg = env.get("XDG_DATA_HOME")
-    if not (xdg and os.path.isabs(xdg)):
-        xdg = os.path.join(home, ".local", "share")
-    return os.path.join(xdg, appDirName)
+    if not (xdg and posixpath.isabs(xdg)):
+        xdg = posixpath.join(home, ".local", "share")
+    return posixpath.join(xdg, appDirName)

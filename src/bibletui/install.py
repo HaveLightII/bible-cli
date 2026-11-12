@@ -5,6 +5,7 @@ import hashlib
 import os
 import shutil
 import sqlite3
+from contextlib import closing
 
 from .resources import _sniffMybibleKind
 
@@ -55,13 +56,12 @@ def sha256Of(path):
 
 def hasTables(path, names):
     try:
-        c = sqlite3.connect(path)
-        have = {
-            r[0] for r in c.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
-        }
-        c.close()
+        with closing(sqlite3.connect(path)) as c:
+            have = {
+                r[0] for r in c.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
     except sqlite3.Error:
         return False
     return all(n in have for n in names)

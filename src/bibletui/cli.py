@@ -5,6 +5,7 @@ import os
 import re
 import sqlite3
 import sys
+from contextlib import closing
 
 from . import __version__
 from .books import (
@@ -553,9 +554,8 @@ def _loadStoredSettingsDict():
     if not path:
         return {}
     try:
-        conn = sqlite3.connect(path)
-        rows = conn.execute("SELECT key, value FROM settings").fetchall()
-        conn.close()
+        with closing(sqlite3.connect(path)) as conn:
+            rows = conn.execute("SELECT key, value FROM settings").fetchall()
     except sqlite3.Error:
         return {}
     return {k: v for k, v in rows}

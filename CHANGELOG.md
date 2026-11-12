@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### 修正
+
+- Windows：驗證資料檔失敗時 SQLite 連線未關閉，導致 `bible data install` 解壓縮後的 `.part` 暫存檔無法刪除；改以 `contextlib.closing` 確保連線關閉（`resources.py`、`install.py`、`cli.py`）。
+- `userDataDir` 依 `platform` 參數選用 `ntpath` 或 `posixpath`，不再受主機的 `os.path` 影響；Python 3.13 起 Windows 的 `os.path.isabs("/data")` 為 `False`，使測試在 Windows 主機上模擬 Linux 時失敗。真實主機的行為不變。
+
 ## [0.1.0] - 2026-11-12
 
 首次公開發布。以下為自 0.0.1 以來的變更。
