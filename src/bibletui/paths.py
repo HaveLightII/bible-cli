@@ -17,6 +17,18 @@ def findSourceRoot():
 
 scriptDir = findSourceRoot()
 
+
+def launchCommand(argv0=None, platform=None):
+    if argv0 is None:
+        argv0 = sys.argv[0] if sys.argv else ""
+    python = "python" if (platform or sys.platform).startswith("win") else "python3"
+    name = os.path.basename(argv0)
+    if name == "bible.py":
+        return f"{python} bible.py"
+    if name == "__main__.py":
+        return f"{python} -m bibletui"
+    return "bible"
+
 dataDirEnvName = "BIBLE_CLI_DATA_DIR"
 appDirName = "bible-cli"
 

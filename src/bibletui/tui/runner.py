@@ -5,6 +5,7 @@ import os
 import sys
 
 from ..console import isWindows
+from ..paths import launchCommand
 from ..sources.recovery import connect
 from .app import App
 
@@ -31,9 +32,9 @@ def runTui(dbPath, strongBiblePath=None, dictPath=None, initialMode="books"):
                 "    pip install windows-curses\n\n"
             )
         sys.stderr.write("在此之前，您仍可使用 CLI 模式，例如：\n")
-        sys.stderr.write("    python3 bible.py list\n")
-        sys.stderr.write("    python3 bible.py read 創世記 1\n")
-        sys.stderr.write("    python3 bible.py orig 創世記 1\n")
+        sys.stderr.write(f"    {launchCommand()} list\n")
+        sys.stderr.write(f"    {launchCommand()} read 創世記 1\n")
+        sys.stderr.write(f"    {launchCommand()} orig 創世記 1\n")
         sys.exit(1)
 
     if dbPath and not os.path.exists(dbPath):

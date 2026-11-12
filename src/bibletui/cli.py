@@ -27,7 +27,7 @@ from .constants import (
     zhLangs,
 )
 from .install import findInDir, installOne
-from .paths import userDataDir
+from .paths import launchCommand, userDataDir
 from .render import (
     insertFootnoteMarkers,
     renderDictHtml,
@@ -382,9 +382,9 @@ def normalizeModeName(value):
 
 
 def buildParser():
-    p = argparse.ArgumentParser(description="恢復本聖經 CLI / TUI")
+    p = argparse.ArgumentParser(prog=launchCommand(), description="恢復本聖經 CLI / TUI")
     p.add_argument(
-        "--version", action="version", version=f"bible.py {__version__}",
+        "--version", action="version", version=f"bible {__version__}",
     )
     p.add_argument("--db", default=None, help="sqlite 資料庫路徑")
     p.add_argument(
@@ -499,8 +499,8 @@ noDatabaseMsg = (
     "找不到可用的聖經資料庫。\n"
     "請將 bible.db（恢復本）或 .mybible 檔案放在使用者資料目錄或目前目錄"
     "（從原始碼執行時也包含 bible.py 所在目錄），\n"
-    "並可執行 `bible.py data` 查看搜尋位置與偵測結果；"
-    "下載資料檔後可用 `data install --from-dir <資料夾>` 安裝。\n"
+    f"並可執行 `{launchCommand()} data` 查看搜尋位置與偵測結果；"
+    f"下載資料檔後可用 `{launchCommand()} data install --from-dir <資料夾>` 安裝。\n"
 )
 
 

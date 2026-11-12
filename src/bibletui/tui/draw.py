@@ -4,6 +4,7 @@ from ..books import (
     enBookNames,
     zhBookNames,
 )
+from ..paths import launchCommand
 from ..render import (
     renderDictHtml,
     splitStrongVerse,
@@ -526,7 +527,7 @@ class DrawMixin:
             lines.append("                        （串珠顯示於經節後方 a,b,...，可點按跳轉）")
         else:
             lines.append("儲存功能尚未啟用：執行 :setup-storage 以啟用")
-            lines.append("設定／筆記／書籤／串珠功能（會在使用者資料目錄建立 bible-note.db，路徑可用 bible.py data 查看）")
+            lines.append(f"設定／筆記／書籤／串珠功能（會在使用者資料目錄建立 bible-note.db，路徑可用 {launchCommand()} data 查看）")
         lines.append("")
         lines.append("新舊約書卷中英對照：")
         for i, (zh, en) in enumerate(zip(zhBookNames, enBookNames), start=1):
