@@ -18,14 +18,15 @@
 
 ### 已完成（階段 5 至 7，已合併到 `main`）
 
-- 重整為可安裝的 Python 套件 `bibletui`（`src/bibletui/`，`pyproject.toml`，Python 3.9 以上），提供 `bible` 指令，也可用 `python -m bibletui`；根目錄 `bible.py` 保留為啟動檔，`python3 bible.py` 照舊可用
+- 重整為可安裝的 Python 套件 `bibletui`（`src/bibletui/`，`pyproject.toml`，Python 3.10 以上），提供 `bible` 指令，也可用 `python -m bibletui`；根目錄 `bible.py` 保留為啟動檔，`python3 bible.py` 照舊可用
 - 程式拆成 `cli`、`paths`、`resources`、`books`、`storage`、`install`、`render`、`sources/`、`tui/` 等模組；依賴改寫在 `pyproject.toml`（Windows 自動安裝 `windows-curses`），移除 `requirement.txt`；`tools/` 改名 `bin/`
 - 新增 `bible data install [--from-dir DIR] [--from-file FILE] [--force]`：不連網，驗證 SHA-256 後安裝資料檔案到使用者資料目錄；找不到資料庫時的提示改為指向此指令
 - 安裝版不再搜尋程式所在目錄，只搜尋命令列、環境變數、已存設定、使用者資料目錄與目前目錄；舊筆記資料庫遷移只在從原始碼執行時進行
 - `--version` 改印 `bible <版本>`（原為 `bible.py <版本>`）；錯誤提示與說明依啟動方式顯示 `bible`、`python3 bible.py` 或 `python3 -m bibletui`
 - 取得資料檔案改為手動下載後本機安裝，不做自動連網下載；恢復本不提供下載，README 新增「取得恢復本資料庫」說明
 - 授權：MIT
-- 新增單元與煙霧測試（`tests/`，標準函式庫 `unittest`，使用虛構的合成資料）與 GitHub Actions 工作流程（Linux、macOS、Windows，Python 3.9 至 3.14）
+- 新增單元與煙霧測試（`tests/`，標準函式庫 `unittest`，使用虛構的合成資料）與 GitHub Actions 工作流程（Linux、macOS、Windows，Python 3.10 至 3.14）
+- 最低支援的 Python 版本由 3.9 改為 3.10：CI 首次執行時，`ubuntu-latest`（Ubuntu 26.04）上找不到 Python 3.9，且 CPython 3.9 已於 2025 年 10 月結束支援
 
 ### 計畫中
 

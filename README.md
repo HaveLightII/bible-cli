@@ -21,7 +21,7 @@
 
 ## Tech Stack
 
-**執行環境：** Python 3.9 以上
+**執行環境：** Python 3.10 以上
 
 **核心套件：** `sqlite3`、`curses`（Windows 為 `windows-curses`）、`argparse`
 
@@ -263,7 +263,7 @@ Windows 以 `pip` 或 `uv` 安裝時會自動安裝 `windows-curses`；從原始
   python3 -m unittest discover -s tests -v
 ```
 
-GitHub Actions 會在 Linux、macOS、Windows 與 Python 3.9 至 3.14 上執行同一組測試（`.github/workflows/tests.yml`）。TUI 的煙霧測試使用偽終端機，只在 Linux 與 macOS 執行。
+GitHub Actions 會在 Linux、macOS、Windows 與 Python 3.10 至 3.14 上執行同一組測試（`.github/workflows/tests.yml`）。TUI 的煙霧測試使用偽終端機，只在 Linux 與 macOS 執行。
 
 另有 `bin/baseline.sh` 與 `bin/equiv*.py`：前者以真實資料庫比對 CLI 輸出，需要自備三份資料庫，不納入 CI。
 
