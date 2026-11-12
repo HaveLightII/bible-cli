@@ -91,7 +91,7 @@ def cmdDataInstall(args, _conn):
         if not found:
             sys.stderr.write(
                 f"{args.fromDir}: 找不到可安裝的檔案"
-                "（cuvt.bbl.mybible、strong_lite.dct.mybible、bible.db）\n"
+                "（cuvt.bbl.mybible、strong_lite.dct.mybible、bible.db，.gz 壓縮檔亦可）\n"
             )
             sys.exit(2)
         sources.extend(found)
@@ -481,14 +481,14 @@ def buildParser():
     )
     pInstall.add_argument(
         "--from-dir", dest="fromDir", default=None,
-        help="含 cuvt.bbl.mybible、strong_lite.dct.mybible、bible.db 的資料夾",
+        help="含 cuvt.bbl.mybible、strong_lite.dct.mybible、bible.db 的資料夾（.gz 壓縮檔可直接使用）",
     )
     pInstall.add_argument(
         "--from-file", dest="fromFile", action="append", default=[],
-        help="單一資料檔路徑，可重複指定",
+        help="單一資料檔路徑（可為 .gz），可重複指定",
     )
     pInstall.add_argument(
-        "--force", action="store_true", help="SHA-256 不符或目標已存在時仍安裝",
+        "--force", action="store_true", help="目標已存在且內容不同時仍覆蓋",
     )
     pInstall.set_defaults(func=cmdDataInstall)
 

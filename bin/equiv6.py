@@ -30,10 +30,7 @@ assert ins.matchKnownName("other.db") is None
 fakeCuv = os.path.join(src, "cuvt.bbl.mybible")
 makeDb(fakeCuv, ["Bible"])
 status, msg = ins.installOne(fakeCuv, dest)
-assert status == "error" and "SHA-256 不符" in msg, msg
-assert not os.path.exists(dest)
-status, msg = ins.installOne(fakeCuv, dest, force=True)
-assert status == "installed", msg
+assert status == "installed" and "SHA-256 與作者版本不同" in msg, msg
 assert os.path.isfile(os.path.join(dest, "cuvt.bbl.mybible"))
 assert not [n for n in os.listdir(dest) if n.endswith(".part")]
 status, msg = ins.installOne(fakeCuv, dest)

@@ -28,6 +28,11 @@
 - 新增單元與煙霧測試（`tests/`，標準函式庫 `unittest`，使用虛構的合成資料）與 GitHub Actions 工作流程（Linux、macOS、Windows，Python 3.10 至 3.14）
 - 最低支援的 Python 版本由 3.9 改為 3.10：CI 首次執行時，`ubuntu-latest`（Ubuntu 26.04）上找不到 Python 3.9，且 CPython 3.9 已於 2025 年 10 月結束支援
 
+### 已完成（資料散布調整）
+
+- 和合本 `cuvt.bbl.mybible` 不再由 README 提供下載連結，改指引自行從 MySword 官方網站或應用程式取得（README 新增「取得和合本」）；Strong 字典的連結不變
+- `bible data install`：`.mybible` 改為檢查資料表結構，SHA-256 與作者版本不同時只警告、不再拒絕（`--force` 只用於目標已存在且內容不同時覆蓋）；可直接安裝 MySword 網站的 `.gz` 壓縮檔
+
 ### 計畫中
 
 - 確認 CI 在各平台與 Python 版本全數通過，必要時調整支援範圍

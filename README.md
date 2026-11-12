@@ -14,7 +14,7 @@
 - 全文搜尋：支援多字串交集查詢、`--exclude` 差集查詢
 - 類 vim 的 `:` 指令模式，可直接輸入 `:創世記 1 1` 之類的參照跳轉
 - 滑鼠／觸控支援：點擊書卷、章節、經文展開註解、原文標色字查字義
-- 資料檔案安裝指令 `bible data install`：驗證 SHA-256 後安裝到使用者資料目錄，不連網
+- 資料檔案安裝指令 `bible data install`：驗證資料表結構後安裝到使用者資料目錄，不連網，可直接安裝 MySword 的 `.gz` 壓縮檔
 - 選用的筆記／書籤／串珠功能（需執行 `:setup-storage` 啟用，才會在使用者資料目錄建立本機資料庫）
 - 同時相容 Linux / macOS / Windows（Windows 需另外安裝 `windows-curses`）
 
@@ -27,7 +27,7 @@
 
 **資料來源：** `bible.db`（恢復本內容，選用）、MySword 格式的 `.dct.mybible`（Strong 字典）與 `.bbl.mybible`（含 Strong 編號的和合本）
 
-**本倉庫不附帶任何資料庫檔案。和合本與 Strong 字典請依下方「資料檔案」章節的連結自行下載；恢復本 `bible.db` 不提供下載，請依「取得恢復本資料庫」自行取得。使用前請確認符合各自的授權條款。**
+**本倉庫不附帶任何資料庫檔案。和合本請依「取得和合本」從 MySword 官方網站自行下載；Strong 字典請依下方「資料檔案」章節的連結下載；恢復本 `bible.db` 不提供下載，請依「取得恢復本資料庫」自行取得。使用前請確認符合各自的授權條款。**
 
 
 ## 資料檔案
@@ -37,10 +37,10 @@
 | 檔案 | 用途 | 下載連結 | SHA-256 |
 | :--- | :--- | :--- | :--- |
 | `bible.db` | 恢復本內容（選用） | 不提供，見「取得恢復本資料庫」 | `1ef6a0fbf1434a0fc27757afbcf73f92e5d7a893d4556d5b067caabce39dab7d` |
-| `cuvt.bbl.mybible` | 和合本（含 Strong 編號），沒有恢復本時的預設經文 | [Google Drive 資料夾](https://drive.google.com/drive/folders/1X1sSrIra8it3SX0nDbnuU_4PVSLj1_kt) | `946ad2a51d6666a7df6ebb9fc753f0f05a9fbf371730f39ee8e4e5ac5a8f37ec` |
+| `cuvt.bbl.mybible` | 和合本（含 Strong 編號），沒有恢復本時的預設經文 | MySword 官方下載頁，見「取得和合本」 | `946ad2a51d6666a7df6ebb9fc753f0f05a9fbf371730f39ee8e4e5ac5a8f37ec` |
 | `strong_lite.dct.mybible` | Strong 字典 | [Google Drive 資料夾](https://drive.google.com/drive/folders/1X1sSrIra8it3SX0nDbnuU_4PVSLj1_kt) | `077b01dc7c3bab17d8497993016b4e72b1b5c637571a7cc0df323910a6df3cd5` |
 
-`bible.db` 欄位的 SHA-256 是作者所用版本的雜湊，僅供參考；自行取得的檔案可能因應用程式版本不同而不同。若取得的 `bible.db` 是分割檔，可使用 `./bin/merge_db.sh` 合併。
+表格中的 SHA-256 是作者所用版本的雜湊，僅供參考；自行取得的檔案可能因來源或版本不同而不同，安裝時只會顯示警告，不會拒絕。若取得的 `bible.db` 是分割檔，可使用 `./bin/merge_db.sh` 合併。
 
 只有 `cuvt.bbl.mybible` 就能啟動；加上 `strong_lite.dct.mybible` 可查 Strong 字義；加上 `bible.db` 才有恢復本、大綱、註解、書卷簡介與英文對照。
 
@@ -53,7 +53,7 @@
 
 ```bash
   bible data install --from-dir ~/Downloads/bible-data
-  bible data install --from-file cuvt.bbl.mybible --from-file strong_lite.dct.mybible
+  bible data install --from-file cuvt.bbl.mybible.gz --from-file strong_lite.dct.mybible
 ```
 
 1：安裝資料夾第一層中檔名符合的已知檔案  
@@ -61,10 +61,26 @@
 
 說明：
 
-- 不會連網；兩個 `.mybible` 檔會比對 SHA-256，不符即拒絕安裝，`bible.db` 只警告
+- 不會連網；`.mybible` 檔會檢查資料表結構（和合本須含 `Bible` 表、Strong 字典須含 `dictionary` 表，`bible.db` 須含 `content`、`book_name`），SHA-256 與作者版本不同時只顯示警告
+- 可直接安裝 `.gz` 壓縮檔（MySword 網站的下載檔格式），會先解壓縮再驗證
 - 檔名比對忽略大小寫，並把底線視為點（雲端硬碟下載時常把 `cuvt.bbl.mybible` 改成 `cuvt_bbl.mybible`，安裝後會還原為正確檔名）
 - 目標已有相同內容的檔案時略過；內容不同時需加 `--force` 才會覆蓋
 - 安裝完成後可用 `bible data` 查看偵測結果
+
+
+### 取得和合本
+
+和合本模組 `cuvt.bbl.mybible` 取自 MySword 的模組。本專案不提供它的下載連結，請自行向 MySword 取得：
+
+- 網站：開啟 [MySword 的 Bibles 下載頁](https://www.mysword.info/download-mysword/bibles)，在 Chinese 區找到「Chinese Union Version 和合本 - Traditional with Strong's numbers 繁體中文版連史特朗經文滙篇」（簡稱 Cuv/T，檔名 `cuvt.bbl.mybible.gz`，頁面標示下載約 2.1 MB、解壓後約 6.5 MB），下載後直接安裝：
+
+  ```bash
+  bible data install --from-file cuvt.bbl.mybible.gz
+  ```
+
+- 應用程式：在 MySword 應用程式內的模組下載畫面（Download modules）下載同一個模組，再從 MySword 的模組資料夾（首次執行時選擇的 Modules Path）取出 `cuvt.bbl.mybible`，以 `--from-file` 安裝。
+
+下載頁沒有標示此模組的授權條款；使用前請自行確認 MySword 的授權說明與經文版權。MySword 目前提供的檔案與表格中的 SHA-256 是否相同，作者未驗證；不同時 `bible data install` 只會警告。
 
 
 ### 取得恢復本資料庫
