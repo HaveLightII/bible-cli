@@ -16,11 +16,21 @@
 - 使用者資料（筆記、書籤、串珠、設定）改放各作業系統的使用者資料目錄，可用環境變數 `BIBLE_CLI_DATA_DIR` 覆寫；舊位置的 `.bible-note.db` 於互動啟動時詢問是否複製
 - 修正：空的 Strong 標記、跨來源跳轉時節編號不存在的後備、舊版 ncurses 的滾輪向下
 
+### 已完成（階段 5 至 7，已合併到 `main`）
+
+- 重整為可安裝的 Python 套件 `bibletui`（`src/bibletui/`，`pyproject.toml`，Python 3.9 以上），提供 `bible` 指令，也可用 `python -m bibletui`；根目錄 `bible.py` 保留為啟動檔，`python3 bible.py` 照舊可用
+- 程式拆成 `cli`、`paths`、`resources`、`books`、`storage`、`install`、`render`、`sources/`、`tui/` 等模組；依賴改寫在 `pyproject.toml`（Windows 自動安裝 `windows-curses`），移除 `requirement.txt`；`tools/` 改名 `bin/`
+- 新增 `bible data install [--from-dir DIR] [--from-file FILE] [--force]`：不連網，驗證 SHA-256 後安裝資料檔案到使用者資料目錄；找不到資料庫時的提示改為指向此指令
+- 安裝版不再搜尋程式所在目錄，只搜尋命令列、環境變數、已存設定、使用者資料目錄與目前目錄；舊筆記資料庫遷移只在從原始碼執行時進行
+- `--version` 改印 `bible <版本>`（原為 `bible.py <版本>`）；錯誤提示與說明依啟動方式顯示 `bible`、`python3 bible.py` 或 `python3 -m bibletui`
+- 取得資料檔案改為手動下載後本機安裝，不做自動連網下載；恢復本不提供下載，README 新增「取得恢復本資料庫」說明
+- 授權：MIT
+
 ### 計畫中
 
-- 重整為可用 pipx / uv 安裝的套件，提供 `bible` 指令
-- 資料檔案的取得方式（首次下載）
-- 加入測試與跨平台 CI
+- 加入測試與跨平台 CI（ubuntu、macos、windows，Python 3.9 至 3.14）
+- 發布 0.1.0（GitHub release，PyPI 視情況）
+- 視需求：curses 不可用時的純文字後備、單檔執行檔
 
 ## [0.0.1] - 基準版本
 

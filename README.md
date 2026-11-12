@@ -1,6 +1,6 @@
-# 恢復本聖經 CLI / TUI
+# bible-cli：聖經 CLI / TUI
 
-單一 Python 檔案（`bible.py`）提供的聖經查詢工具，同時支援命令列（CLI）批次查詢與互動式終端機（TUI）瀏覽，並可對照原文 Strong 編號查字義。不需要額外安裝資料庫伺服器，僅依賴 sqlite 檔案（`bible.db`、MySword 的 `.mybible` 模組）運作。
+以指令 `bible`（Python 套件 `bibletui`）提供的聖經查詢工具，同時支援命令列（CLI）批次查詢與互動式終端機（TUI）瀏覽，並可對照原文 Strong 編號查字義。不需要額外安裝資料庫伺服器，僅依賴 sqlite 檔案（`bible.db`、MySword 的 `.mybible` 模組）運作。
 
 恢復本 `bible.db` 為選用：偵測到時預設使用恢復本；沒有時以和合本（`cuvt.bbl.mybible`）為預設，仍可閱讀、搜尋與查 Strong 字義，只是沒有大綱、註解、書卷簡介與英文對照。
 
@@ -14,13 +14,14 @@
 - 全文搜尋：支援多字串交集查詢、`--exclude` 差集查詢
 - 類 vim 的 `:` 指令模式，可直接輸入 `:創世記 1 1` 之類的參照跳轉
 - 滑鼠／觸控支援：點擊書卷、章節、經文展開註解、原文標色字查字義
+- 資料檔案安裝指令 `bible data install`：驗證 SHA-256 後安裝到使用者資料目錄，不連網
 - 選用的筆記／書籤／串珠功能（需執行 `:setup-storage` 啟用，才會在使用者資料目錄建立本機資料庫）
 - 同時相容 Linux / macOS / Windows（Windows 需另外安裝 `windows-curses`）
 
 
 ## Tech Stack
 
-**執行環境：** Python 3
+**執行環境：** Python 3.9 以上
 
 **核心套件：** `sqlite3`、`curses`（Windows 為 `windows-curses`）、`argparse`
 
@@ -31,7 +32,7 @@
 
 ## 資料檔案
 
-下列檔案不納入版本控制（已列入 `.gitignore`），請取得後放在 `bible.py` 同一個目錄，或下方「資料目錄與偵測順序」列出的其他位置：
+下列檔案不納入版本控制（已列入 `.gitignore`），請取得後以 `bible data install` 安裝（見下方「安裝資料檔案」），或直接放進「資料目錄與偵測順序」列出的位置：
 
 | 檔案 | 用途 | 下載連結 | SHA-256 |
 | :--- | :--- | :--- | :--- |
@@ -44,6 +45,26 @@
 只有 `cuvt.bbl.mybible` 就能啟動；加上 `strong_lite.dct.mybible` 可查 Strong 字義；加上 `bible.db` 才有恢復本、大綱、註解、書卷簡介與英文對照。
 
 `strong_lite.dct.mybible` 的版權聲明與散布條件記載於該檔 `details` 表的 `comments` 欄位，使用與轉散布時請一併遵守。
+
+
+### 安裝資料檔案
+
+把下載的檔案放進同一個資料夾，再安裝到使用者資料目錄：
+
+```bash
+  bible data install --from-dir ~/Downloads/bible-data
+  bible data install --from-file cuvt.bbl.mybible --from-file strong_lite.dct.mybible
+```
+
+1：安裝資料夾第一層中檔名符合的已知檔案  
+2：逐一指定檔案，可重複使用
+
+說明：
+
+- 不會連網；兩個 `.mybible` 檔會比對 SHA-256，不符即拒絕安裝，`bible.db` 只警告
+- 檔名比對忽略大小寫，並把底線視為點（雲端硬碟下載時常把 `cuvt.bbl.mybible` 改成 `cuvt_bbl.mybible`，安裝後會還原為正確檔名）
+- 目標已有相同內容的檔案時略過；內容不同時需加 `--force` 才會覆蓋
+- 安裝完成後可用 `bible data` 查看偵測結果
 
 
 ### 取得恢復本資料庫
@@ -60,7 +81,7 @@
 
 ## 版本
 
-目前版本：0.0.1（`python3 bible.py --version`）。下一個目標版本為 0.1.0，變更內容見 [CHANGELOG.md](CHANGELOG.md)。
+目前版本：0.0.1（`bible --version`）。下一個目標版本為 0.1.0，變更內容見 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 資料目錄與偵測順序
 
@@ -70,8 +91,8 @@
 2. 環境變數：`BIBLE_STRONG_DICT`、`BIBLE_STRONG_BIBLE`
 3. 已存設定（TUI 設定畫面中的資料庫路徑）
 4. 使用者資料目錄
-5. `bible.py` 所在目錄
-6. 目前工作目錄
+5. 目前工作目錄
+6. 倉庫根目錄（只有從原始碼執行時才搜尋，安裝版不依賴倉庫）
 
 使用者資料目錄依作業系統而定：
 
@@ -81,9 +102,9 @@
 | macOS | `~/Library/Application Support/bible-cli` |
 | Linux／Termux | `$XDG_DATA_HOME/bible-cli`（未設定時為 `~/.local/share/bible-cli`） |
 
-筆記、書籤、串珠與設定存放於該目錄的 `bible-note.db`（執行 `:setup-storage` 後才會建立）。若 `bible.py` 同目錄有舊版的 `.bible-note.db`，互動式啟動時會詢問是否複製到新位置（複製而非搬移，原檔保留）。
+筆記、書籤、串珠與設定存放於該目錄的 `bible-note.db`（執行 `:setup-storage` 後才會建立）。從原始碼執行時，若倉庫根目錄有舊版的 `.bible-note.db`，互動式啟動時會詢問是否複製到新位置（複製而非搬移，原檔保留）；安裝版不處理舊檔。
 
-執行 `python3 bible.py data` 可查看資料目錄、搜尋順序與實際偵測到的檔案。
+執行 `bible data` 可查看資料目錄、搜尋順序與實際偵測到的檔案。
 
 
 ## Environment Variables
@@ -99,9 +120,35 @@
 
 ## Installation
 
-將 `bible.py` 與所需的資料檔案（`bible.db` 及／或 `*.mybible`）放在同一個目錄下即可（也可放在使用者資料目錄），不需要額外安裝套件。
+建議以 `uv tool` 從 GitHub 安裝，會建立 `bible` 指令：
 
-Windows 使用者若要使用互動式 TUI，需另外安裝 `windows-curses`：
+```bash
+  uv tool install git+https://github.com/HaveLightII/bible-cli
+```
+
+更新到最新版：
+
+```bash
+  uv tool install --reinstall git+https://github.com/HaveLightII/bible-cli
+```
+
+`pipx install git+https://github.com/HaveLightII/bible-cli` 理論上同樣可行，但作者尚未實測。已在 Android Termux 實測 `uv tool`；macOS 與 Windows 尚未實測。
+
+從原始碼執行（不安裝）：
+
+```bash
+  git clone https://github.com/HaveLightII/bible-cli
+  cd bible-cli
+  python3 bible.py
+```
+
+以可編輯模式安裝（開發用）：
+
+```bash
+  pip install -e .
+```
+
+Windows 以 `pip` 或 `uv` 安裝時會自動安裝 `windows-curses`；從原始碼直接執行時，需自行安裝：
 
 ```bash
   pip install windows-curses
@@ -109,41 +156,45 @@ Windows 使用者若要使用互動式 TUI，需另外安裝 `windows-curses`：
 
 未安裝時程式會自動偵測並提示安裝方式，退回可用的 CLI 說明，不會直接崩潰。
 
+安裝後請先安裝資料檔案（見上方「安裝資料檔案」）；找不到任何資料庫時，程式會印出提示並以離開碼 1 結束。
 
-## Run Locally
+
+## Run
 
 不帶任何子指令執行，程式會依偵測到的檔案自動判斷要開啟的介面：有恢復本時開啟恢復本，否則開啟和合本（Strong）畫面；若已在 TUI 設定中存過預設模式，則以該設定優先：
 
 ```bash
-  python3 bible.py
+  bible
 ```
 
 強制指定介面：
 
 ```bash
-  python3 bible.py --mode recovery
-  python3 bible.py --mode strong
+  bible --mode recovery
+  bible --mode strong
 ```
 
 
 ## Usage/Examples
+
+以下以安裝版的 `bible` 指令為例；從原始碼執行時，請把 `bible` 換成 `python3 bible.py`，也可用 `python3 -m bibletui`。
 
 `list`、`read`、`search` 預設使用恢復本（有 `bible.db` 時），沒有恢復本時自動改用和合本；也可用 `--source cuv|recovery` 明確指定，和合本模組路徑可用 `--strongbible` 指定。
 
 列出書卷：
 
 ```bash
-  python3 bible.py list
-  python3 bible.py list 新約
-  python3 bible.py list --source cuv
+  bible list
+  bible list 新約
+  bible list --source cuv
 ```
 
 讀取經文（書卷名支援中／英文，也可用 1-66 的編號）：
 
 ```bash
-  python3 bible.py read 創世記 1
-  python3 bible.py read Genesis 1:1 --en --cuv
-  python3 bible.py read 創 1:1 --source cuv
+  bible read 創世記 1
+  bible read Genesis 1:1 --en --cuv
+  bible read 創 1:1 --source cuv
 ```
 
 沒有恢復本時，書卷名可用全名、英文名、編號，或常用縮寫（如 `創`、`撒上`、`林前`、`gen`、`1sam`）。
@@ -151,22 +202,22 @@ Windows 使用者若要使用互動式 TUI，需另外安裝 `windows-curses`：
 全文搜尋：
 
 ```bash
-  python3 bible.py search 起初 --lang big5
-  python3 bible.py search 神創造 --source cuv
+  bible search 起初 --lang big5
+  bible search 神創造 --source cuv
 ```
 
 查看書卷簡介、經文註解（需要恢復本）：
 
 ```bash
-  python3 bible.py intro 創世記
-  python3 bible.py note 創世記 1:1 1
+  bible intro 創世記
+  bible note 創世記 1:1 1
 ```
 
 原文 Strong 對照與查詢：
 
 ```bash
-  python3 bible.py orig 創世記 1:1 --word 1
-  python3 bible.py strong G26
+  bible orig 創世記 1:1 --word 1
+  bible strong G26
 ```
 
 以和合本為來源時（或沒有恢復本時），下列項目不可用，程式會印出「此資料來源不含此內容」並以離開碼 2 結束：`--en`、`--no-outline`、`--no-footnote`、`--lang` 指定 `big5` 以外的語言。`intro`、`note` 需要恢復本，找不到時以離開碼 1 結束。
@@ -202,3 +253,8 @@ Windows 使用者若要使用互動式 TUI，需另外安裝 `windows-curses`：
 ## 人工智慧使用聲明
 
 - 本程式有使用AI輔助開發與優化。
+
+
+## License
+
+以 [MIT 授權](LICENSE) 發布。本倉庫不含任何聖經資料庫，資料檔案各自的授權請見「資料檔案」章節。
