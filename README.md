@@ -44,7 +44,7 @@
 
 只有 `cuvt.bbl.mybible` 就能啟動；加上 `strong_lite.dct.mybible` 可查 Strong 字義；加上 `bible.db` 才有恢復本、大綱、註解、書卷簡介與英文對照。
 
-`strong_lite.dct.mybible` 的版權聲明與散布條件記載於該檔 `details` 表的 `comments` 欄位（摘要見 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)），使用與轉散布時請一併遵守。
+`strong_lite.dct.mybible` 的版權聲明與散布條件記載於該檔 `details` 表的 `comments` 欄位（摘要見 [THIRD_PARTY_NOTICES.md](https://github.com/HaveLightII/bible-cli/blob/main/THIRD_PARTY_NOTICES.md)），使用與轉散布時請一併遵守。
 
 
 ### 安裝資料檔案
@@ -97,7 +97,7 @@
 
 ## 版本
 
-目前版本：0.1.0（`bible --version`），變更內容見 [CHANGELOG.md](CHANGELOG.md)。
+目前版本：0.1.0（`bible --version`），變更內容見 [CHANGELOG.md](https://github.com/HaveLightII/bible-cli/blob/main/CHANGELOG.md)。
 
 ## 資料目錄與偵測順序
 
@@ -147,6 +147,8 @@
 ```bash
   uv tool install --reinstall git+https://github.com/HaveLightII/bible-cli
 ```
+
+發行於 PyPI 的套件名為 `bible-strong-tui`（安裝後指令仍為 `bible`，程式匯入名稱為 `bibletui`）；PyPI 安裝尚待首次發布後實測，目前請以上述 GitHub 方式安裝。
 
 `pipx install git+https://github.com/HaveLightII/bible-cli` 理論上同樣可行，但作者尚未實測。已在 Android Termux 實測 `uv tool`；macOS 與 Windows 尚未實測。
 
@@ -286,4 +288,4 @@ GitHub Actions 會在 Linux、macOS、Windows 與 Python 3.10 至 3.14 上執行
 
 ## License
 
-以 [MIT 授權](LICENSE) 發布。本倉庫不含任何聖經資料庫，資料檔案各自的授權請見「資料檔案」章節與 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+以 [MIT 授權](https://github.com/HaveLightII/bible-cli/blob/main/LICENSE) 發布。本倉庫不含任何聖經資料庫，資料檔案各自的授權請見「資料檔案」章節與 [THIRD_PARTY_NOTICES.md](https://github.com/HaveLightII/bible-cli/blob/main/THIRD_PARTY_NOTICES.md)。

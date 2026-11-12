@@ -41,6 +41,8 @@
 
 - 新增 `THIRD_PARTY_NOTICES.md`，載明 Strong 字典的版權聲明與散布條件，以及和合本、恢復本的資料來源說明
 - 新增 `.github/workflows/release.yml`：推送 `v*` 標籤時建置並以 PyPI Trusted Publishing 發布，建置時檢查標籤與套件版本一致
+- 發行套件名定為 `bible-strong-tui`（PyPI 以 `bibletui` 與既有的 `bible-tui` 過於相似而拒絕登記）；匯入套件 `bibletui` 與指令 `bible` 不變
+- README 內指向 CHANGELOG、LICENSE、THIRD_PARTY_NOTICES 的相對連結改為絕對網址，避免在 PyPI 頁面失效
 - 版本改為 0.1.0，補上 `pyproject.toml` 的關鍵字、分類與專案連結
 
 ### 計畫中

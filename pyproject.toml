@@ -3,7 +3,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "bibletui"
+name = "bible-strong-tui"
 dynamic = ["version"]
 description = "聖經 CLI / TUI：恢復本、和合本與原文 Strong 對照"
 readme = "README.md"
