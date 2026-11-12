@@ -25,10 +25,11 @@
 - `--version` 改印 `bible <版本>`（原為 `bible.py <版本>`）；錯誤提示與說明依啟動方式顯示 `bible`、`python3 bible.py` 或 `python3 -m bibletui`
 - 取得資料檔案改為手動下載後本機安裝，不做自動連網下載；恢復本不提供下載，README 新增「取得恢復本資料庫」說明
 - 授權：MIT
+- 新增單元與煙霧測試（`tests/`，標準函式庫 `unittest`，使用虛構的合成資料）與 GitHub Actions 工作流程（Linux、macOS、Windows，Python 3.9 至 3.14）
 
 ### 計畫中
 
-- 加入測試與跨平台 CI（ubuntu、macos、windows，Python 3.9 至 3.14）
+- 確認 CI 在各平台與 Python 版本全數通過，必要時調整支援範圍
 - 發布 0.1.0（GitHub release，PyPI 視情況）
 - 視需求：curses 不可用時的純文字後備、單檔執行檔
 

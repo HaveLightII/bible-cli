@@ -255,6 +255,19 @@ Windows 以 `pip` 或 `uv` 安裝時會自動安裝 `windows-curses`；從原始
 - 本程式有使用AI輔助開發與優化。
 
 
+## Development
+
+測試使用標準函式庫的 `unittest`，不需要額外套件；測試資料全部是虛構的合成資料，不含任何聖經經文或版權內容：
+
+```bash
+  python3 -m unittest discover -s tests -v
+```
+
+GitHub Actions 會在 Linux、macOS、Windows 與 Python 3.9 至 3.14 上執行同一組測試（`.github/workflows/tests.yml`）。TUI 的煙霧測試使用偽終端機，只在 Linux 與 macOS 執行。
+
+另有 `bin/baseline.sh` 與 `bin/equiv*.py`：前者以真實資料庫比對 CLI 輸出，需要自備三份資料庫，不納入 CI。
+
+
 ## License
 
 以 [MIT 授權](LICENSE) 發布。本倉庫不含任何聖經資料庫，資料檔案各自的授權請見「資料檔案」章節。
