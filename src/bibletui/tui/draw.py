@@ -426,7 +426,8 @@ class DrawMixin:
         curses = self.curses
         world = self.strongWorld
         name = zhBookNames[world.selectedBookIndex - 1]
-        self._title(f" {name} 第{world.selectedChapter}章（原文 Strong）", w)
+        label = self.strongModuleLabel or "原文 Strong"
+        self._title(f" {name} 第{world.selectedChapter}章（{label}）", w)
 
         cacheKey = (
             world.selectedBookIndex,
@@ -506,6 +507,7 @@ class DrawMixin:
         lines.append("  :search a b --exclude c   同時含 a、b 後再扣除含 c 的結果")
         lines.append("  按 / 搜尋             與 :search 同一套查詢邏輯（交集／-e／--exclude）")
         lines.append("  Strong 畫面的搜尋     搜尋和合本（忽略標記與全形空格），不支援 -e")
+        lines.append("  :module 或 :mod       列出已安裝的聖經模組；:module kjv 切換並記為預設")
         lines.append("  :help                 顯示本說明")
         lines.append("")
         lines.append("　（註：:S 已配給 :strong、:R 已配給 :recovery，")

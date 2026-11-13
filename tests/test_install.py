@@ -28,7 +28,7 @@ class InstallUnitTests(fixtures.TempCase):
         self.assertIsNone(ins.matchKnownName("other.db"))
         self.assertEqual(ins.matchKnownName("cuvt.bbl.mybible.gz"), "cuvt.bbl.mybible")
         self.assertEqual(ins.matchKnownName("CUVT_bbl.mybible.GZ"), "cuvt.bbl.mybible")
-        self.assertIsNone(ins.matchKnownName("cuvt.bbl.mybible.zip"))
+        self.assertEqual(ins.matchKnownName("cuvt.bbl.mybible.zip"), "cuvt.bbl.mybible")
 
     def gzipFile(self, path):
         gzPath = path + ".gz"

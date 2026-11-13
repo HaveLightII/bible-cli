@@ -1,5 +1,7 @@
 """curses 互動介面主體。"""
 
+import os
+
 from ..books import zhBookNames
 from ..sources.recovery import RecoverySource
 from .theme import (
@@ -16,11 +18,13 @@ from .clipboard import ClipboardMixin
 from .commands import CommandMixin
 from .draw import DrawMixin
 from .keys import KeyMixin
+from .modules import ModuleMixin
 from .navigation import NavigationMixin
 from .notes import NotesMixin
 
 
-class App(NavigationMixin, ClipboardMixin, NotesMixin, DrawMixin, KeyMixin, CommandMixin):
+class App(NavigationMixin, ClipboardMixin, NotesMixin, DrawMixin, KeyMixin, CommandMixin,
+          ModuleMixin):
     _NAV_KEYS = (
         "mode", "showEn", "showCuv", "showOutline",
         "searchQuery", "searchInputText", "searchResults", "searchScroll", "searchIdx",
@@ -43,6 +47,7 @@ class App(NavigationMixin, ClipboardMixin, NotesMixin, DrawMixin, KeyMixin, Comm
         self.strongBiblePath = strongBiblePath
         self.dictPath = dictPath
         self.hasStrongBible = bool(strongBiblePath)
+        self.strongModuleLabel = self._labelForModulePath(strongBiblePath)
         self.strongConn = None
         self.dictConn = None
         self.strongDefCache = {}
@@ -81,7 +86,8 @@ class App(NavigationMixin, ClipboardMixin, NotesMixin, DrawMixin, KeyMixin, Comm
         self.strongWorld = World(
             kind="strong",
             books=list(enumerate(zhBookNames, start=1)) if self.hasStrongBible else [],
-            booksTitle=" 書卷清單（原文 Strong）",
+            booksTitle=(f" 書卷清單（{self.strongModuleLabel}）" if self.strongModuleLabel
+                        else " 書卷清單（原文 Strong）"),
             chaptersTitleSuffix="（原文 Strong）",
             bookClickTag="strongbook",
             chapterClickTag="strongchapter",
@@ -118,6 +124,13 @@ class App(NavigationMixin, ClipboardMixin, NotesMixin, DrawMixin, KeyMixin, Comm
         self._optionEditBuffer = ""
         self._prevModeBeforeConfirm = None
         self._detectStorage()
+
+    @staticmethod
+    def _labelForModulePath(path):
+        if not path:
+            return ""
+        from ..modules import moduleIdFromFile
+        return moduleIdFromFile(os.path.basename(path))
 
     def run(self):
         curses = self.curses

@@ -10,7 +10,10 @@ from .constants import (
     red,
     reset,
 )
-from .sources.cuv import strongTagPattern
+from .sources.cuv import (
+    prepareScripture,
+    strongTagPattern,
+)
 
 
 def insertFootnoteMarkers(content, footnotes, color=True):
@@ -98,7 +101,7 @@ def renderDictHtml(htmlText, color=True):
 
 
 def splitStrongVerse(scripture):
-    parts = re.split(r"(<W[GH]\d*>)", scripture)
+    parts = re.split(r"(<W[GH]\d*>)", prepareScripture(scripture))
     segments = []
     curText, curCodes = "", []
     first = True

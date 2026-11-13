@@ -72,6 +72,29 @@ def makeCuvModule(path):
     c.close()
 
 
+def makeGbfModule(path, abbr="Eng/T", strong=0, ot=1, nt=1):
+    """虛構的英文模組，帶 MySword 的 GBF 格式標記，不含任何聖經經文。"""
+    c = sqlite3.connect(path)
+    c.execute(
+        "CREATE TABLE Details (Description NVARCHAR(255),Abbreviation NVARCHAR(50),Comments TEXT,"
+        "Version TEXT,VersionDate DATETIME,PublishDate DATETIME,RightToLeft BOOL,OT BOOL,NT BOOL,Strong BOOL)"
+    )
+    c.execute(
+        "INSERT INTO Details VALUES(?,?,?,?,?,?,0,?,?,?)",
+        (f"Synthetic module {abbr}", abbr, "test", "1.0", "2026-01-01", None, ot, nt, strong),
+    )
+    c.execute("CREATE TABLE Bible(Book INT, Chapter INT, Verse INT, Scripture TEXT)")
+    rows = [
+        (1, 1, 1, "<TS>Sample Title<Ts><FI>Lorem<Fi> ipsum<RF>a note<Rf> dolor<WTN-NSF> sit<CM>"),
+        (1, 1, 2, "Amet&nbsp;consectetur   <FR>adipiscing<Fr> elit<RX43.3.16>."),
+        (1, 1, 3, "Plain   Text Verse"),
+        (43, 3, 1, "<PI1><PF0>Nine Newest <i>verse</i> here"),
+    ]
+    c.executemany("INSERT INTO Bible VALUES(?,?,?,?)", rows)
+    c.commit()
+    c.close()
+
+
 def makeDictModule(path):
     c = sqlite3.connect(path)
     c.execute("CREATE TABLE dictionary(relativeorder INT, word TEXT, data TEXT)")

@@ -4,7 +4,11 @@ import os
 import sqlite3
 from contextlib import closing
 
+from .config import getDefaultId
 from .paths import scriptDir, userDataDir
+
+preferredBibleFile = "cuvt.bbl.mybible"
+moduleSuffix = {"bible": ".bbl.mybible", "dict": ".dct.mybible"}
 
 
 def _sniffMybibleKind(path):
@@ -45,7 +49,10 @@ def detectResources(baseDir=None):
         if lower.endswith(".dct.mybible"):
             resources["dict"] = resources["dict"] or full
         elif lower.endswith(".bbl.mybible"):
-            resources["strongBible"] = resources["strongBible"] or full
+            if lower == preferredBibleFile:
+                resources["strongBible"] = full
+            else:
+                resources["strongBible"] = resources["strongBible"] or full
         elif lower.endswith(".mybible"):
             kind = _sniffMybibleKind(full)
             if kind == "dict":
@@ -67,6 +74,21 @@ def resourceSearchDirs():
     return dirs
 
 
+def pathForModuleId(kind, ident):
+    if not ident:
+        return None
+    want = (ident + moduleSuffix[kind]).lower()
+    for d in resourceSearchDirs():
+        try:
+            entries = os.listdir(d)
+        except OSError:
+            continue
+        for fname in sorted(entries):
+            if fname.lower() == want and os.path.isfile(os.path.join(d, fname)):
+                return os.path.join(d, fname)
+    return None
+
+
 def resolveResources(args=None, settings=None):
     settings = settings or {}
     found = {"db": None, "dict": None, "strongBible": None}
@@ -80,9 +102,11 @@ def resolveResources(args=None, settings=None):
         "db": ([argDb, settings.get("recovery_db_path"), found["db"]],
                argDb or os.path.join(scriptDir or userDataDir(), "bible.db")),
         "dict": ([argDict, os.environ.get("BIBLE_STRONG_DICT"),
+                  pathForModuleId("dict", getDefaultId("dict")),
                   settings.get("dict_db_path"), found["dict"]],
                  argDict or os.environ.get("BIBLE_STRONG_DICT")),
         "strongBible": ([argStrong, os.environ.get("BIBLE_STRONG_BIBLE"),
+                         pathForModuleId("bible", getDefaultId("bible")),
                          settings.get("strong_db_path"), found["strongBible"]],
                         argStrong or os.environ.get("BIBLE_STRONG_BIBLE")),
     }

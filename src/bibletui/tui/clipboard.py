@@ -7,7 +7,7 @@ from ..console import copyToClipboardText
 from ..constants import needRecoveryMsg
 from ..sources.cuv import (
     CuvSource,
-    strongTagPattern,
+    plainText,
 )
 from ..sources.recovery import (
     bookDisplayName,
@@ -64,7 +64,7 @@ class ClipboardMixin:
         if not row:
             self.statusMessage = "查無經文內容"
             return
-        text = strongTagPattern.sub("", row["Scripture"])
+        text = plainText(row["Scripture"] or "")
         bookName = zhBookNames[world.selectedBookIndex - 1]
         full = f"{bookName} {world.selectedChapter}:{verse}　{text}"
         self.statusMessage = self._copyTextSmart(full, label=f"{bookName} {world.selectedChapter}:{verse}")
@@ -80,7 +80,7 @@ class ClipboardMixin:
             for s in sections:
                 row = CuvSource(conn).verseRaw(bookIndex, chapter, s)
                 if row:
-                    text = strongTagPattern.sub("", row["Scripture"])
+                    text = plainText(row["Scripture"] or "")
                     parts.append(f"{bookName} {chapter}:{s}　{text}")
         else:
             langPrimary = "cuv_big5" if self.showCuv else "big5"

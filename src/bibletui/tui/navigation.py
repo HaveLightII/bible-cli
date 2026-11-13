@@ -3,7 +3,7 @@
 from ..books import resolveAnyBookName
 from ..sources.cuv import (
     CuvSource,
-    strongTagPattern,
+    plainText,
 )
 
 
@@ -154,7 +154,7 @@ class NavigationMixin:
         if conn is not None:
             row = CuvSource(conn).verseRaw(bookIndex, chapter, section)
             if row:
-                return strongTagPattern.sub("", row["Scripture"])
+                return plainText(row["Scripture"] or "")
         return ""
 
     @staticmethod

@@ -86,6 +86,8 @@ class CommandMixin:
                 self._cmdSwitchMode(rest, toStrong=True)
             elif headLower == "recovery" or head == "R":
                 self._cmdSwitchMode(rest, toStrong=False)
+            elif headLower in ("module", "mod"):
+                self._cmdModule(rest)
             elif headLower == "footnote" or head == "F":
                 self._cmdFootnote(rest)
             elif headLower == "intro":

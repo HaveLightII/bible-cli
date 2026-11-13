@@ -14,7 +14,8 @@
 - 全文搜尋：支援多字串交集查詢、`--exclude` 差集查詢
 - 類 vim 的 `:` 指令模式，可直接輸入 `:創世記 1 1` 之類的參照跳轉
 - 滑鼠／觸控支援：點擊書卷、章節、經文展開註解、原文標色字查字義
-- 資料檔案安裝指令 `bible data install`：驗證資料表結構後安裝到使用者資料目錄，不連網，可直接安裝 MySword 的 `.gz` 壓縮檔
+- 資料檔案安裝指令 `bible data install`：驗證資料表結構後安裝到使用者資料目錄，不連網，可直接安裝 MySword 的 `.gz` 與 `.zip` 壓縮檔
+- 多個 MySword 聖經模組並存：`bible data list` 查看、`bible data use` 切換預設、`bible data uninstall` 移除；CLI 用 `--module` 臨時指定，TUI 用 `:module` 切換
 - 選用的筆記／書籤／串珠功能（需執行 `:setup-storage` 啟用，才會在使用者資料目錄建立本機資料庫）
 - 同時相容 Linux / macOS / Windows（Windows 需另外安裝 `windows-curses`）
 
@@ -56,16 +57,17 @@
   bible data install --from-file cuvt.bbl.mybible.gz --from-file strong_lite.dct.mybible
 ```
 
-1：安裝資料夾第一層中檔名符合的已知檔案  
+1：安裝資料夾第一層中的 `bible.db`、`*.bbl.mybible`、`*.dct.mybible`（含 `.gz`、`.zip`）  
 2：逐一指定檔案，可重複使用
 
 說明：
 
 - 不會連網；`.mybible` 檔會檢查資料表結構（和合本須含 `Bible` 表、Strong 字典須含 `dictionary` 表，`bible.db` 須含 `content`、`book_name`），SHA-256 與作者版本不同時只顯示警告
-- 可直接安裝 `.gz` 壓縮檔（MySword 網站的下載檔格式），會先解壓縮再驗證
+- 可直接安裝 `.gz` 與 `.zip` 壓縮檔（MySword 網站兩種都有）；`.zip` 內每個 `.mybible` 檔各自安裝，只取檔名，不依壓縮檔內的路徑建立資料夾；都會先解壓縮到 `.part` 再驗證
+- `.bbl.mybible` 內容必須是聖經模組、`.dct.mybible` 必須是字典，否則拒絕
 - 檔名比對忽略大小寫，並把底線視為點（雲端硬碟下載時常把 `cuvt.bbl.mybible` 改成 `cuvt_bbl.mybible`，安裝後會還原為正確檔名）
 - 目標已有相同內容的檔案時略過；內容不同時需加 `--force` 才會覆蓋
-- 安裝完成後可用 `bible data` 查看偵測結果
+- 安裝完成後可用 `bible data list` 查看已安裝的資料庫，`bible data` 查看偵測結果
 
 
 ### 取得和合本
@@ -95,6 +97,48 @@
 請自行確認取得與使用方式符合該應用程式的使用條款與著作權規定。沒有 `bible.db` 時，程式仍可用和合本與 Strong 字典。
 
 
+### 多個聖經模組
+
+使用者資料目錄可同時放多個 MySword 聖經模組（`*.bbl.mybible`），代號為檔名去掉 `.bbl.mybible`（例如 `kjv.bbl.mybible` 的代號是 `kjv`）；也可用模組內的簡稱（如 `Cuv/T`），不分大小寫。
+
+```bash
+  bible data list
+  bible data use kjv
+  bible data use --reset
+  bible data uninstall kjv
+  bible read 創 1:1 --module cuvt
+  bible --module kjv
+```
+
+1：列出已安裝的聖經模組、字典與恢復本，`*` 為目前使用中  
+2：設定預設聖經模組（寫入使用者資料目錄的 `config.json`）  
+3：清除預設，改回自動選擇  
+4：移除使用者資料目錄內的資料庫（互動環境會詢問；非互動環境需加 `--yes`）  
+5：只這一次改用指定模組，不改預設  
+6：以指定模組啟動 TUI
+
+說明：
+
+- 沒有設定預設時，有 `cuvt` 就用 `cuvt`，否則取檔名排序第一個；安裝新模組不會改變預設
+- `uninstall` 只移除使用者資料目錄內的檔案；位於目前目錄或原始碼目錄的檔案會拒絕並印出路徑，請自行刪除。`recovery` 代表恢復本 `bible.db`
+- 代號同時對應聖經模組與字典時，加 `.bbl` 或 `.dct` 區分（如 `eng.bbl`）
+- TUI 的原文 Strong 畫面使用目前的聖經模組：輸入 `:module` 列出模組，`:module kjv` 切換並記為預設
+- 字典也可用 `data use` 切換預設
+- 命令列參數與環境變數（`BIBLE_STRONG_BIBLE`、`BIBLE_STRONG_DICT`）優先於 `data use` 的預設；`data use` 的預設則優先於 TUI 設定畫面中的 `strong_db_path`、`dict_db_path`
+
+### 其他 MySword 聖經模組的相容性
+
+`.bbl.mybible` 都是 SQLite，內含 `Details`（一筆說明）與 `Bible(Book, Chapter, Verse, Scripture)`，格式見 [MySword Modules' Format](https://mysword.info/modules-format)。程式讀取其中的簡稱、說明、`OT`、`NT`、`Strong` 欄位，經文中的 GBF 標記會去除後顯示（標題 `<TS>` 顯示為〔標題〕、譯註 `<RF>` 不顯示、斜體與耶穌的話等只去標記、Strong 標記 `<WG>`、`<WH>` 保留供查字義）。
+
+限制：
+
+- 只支援 66 卷的書卷編號；書名一律顯示繁體中文，不隨模組語言變換
+- 只有 `Strong` 欄位為 1（或經文內含 Strong 標記）的模組可用 `orig`、可在 TUI 點字查字義
+- 逐字對照（interlinear，含 `<Q>`、`<E>` 等區塊標記）的模組只去標記，各層文字會串在一起，未做版面處理
+- 搜尋會一次載入整個模組；數百 MB 的模組（如 BHSE、OHB）會很慢、很吃記憶體
+- 只測過 `Cuv/T` 與測試用的虛構模組；MySword 網站上的其他模組未逐一實測
+- 商業或有版權的模組，授權由使用者自行確認
+
 ## 版本
 
 目前版本：0.1.0（`bible --version`），變更內容見 [CHANGELOG.md](https://github.com/HaveLightII/bible-cli/blob/main/CHANGELOG.md)。
@@ -103,12 +147,13 @@
 
 資料檔案的偵測順序（前者優先，每一層只取實際存在的檔案）：
 
-1. 命令列參數：`--db`、`--dict`、`--strongbible`
+1. 命令列參數：`--db`、`--dict`、`--strongbible`、`--module`
 2. 環境變數：`BIBLE_STRONG_DICT`、`BIBLE_STRONG_BIBLE`
-3. 已存設定（TUI 設定畫面中的資料庫路徑）
-4. 使用者資料目錄
-5. 目前工作目錄
-6. 倉庫根目錄（只有從原始碼執行時才搜尋，安裝版不依賴倉庫）
+3. `bible data use` 設定的預設模組（`config.json`）
+4. 已存設定（TUI 設定畫面中的資料庫路徑）
+5. 使用者資料目錄
+6. 目前工作目錄
+7. 倉庫根目錄（只有從原始碼執行時才搜尋，安裝版不依賴倉庫）
 
 使用者資料目錄依作業系統而定：
 
@@ -197,7 +242,7 @@ Windows 以 `pip` 或 `uv` 安裝時會自動安裝 `windows-curses`；從原始
 
 以下以安裝版的 `bible` 指令為例；從原始碼執行時，請把 `bible` 換成 `python3 bible.py`，也可用 `python3 -m bibletui`。
 
-`list`、`read`、`search` 預設使用恢復本（有 `bible.db` 時），沒有恢復本時自動改用和合本；也可用 `--source cuv|recovery` 明確指定，和合本模組路徑可用 `--strongbible` 指定。
+`list`、`read`、`search` 預設使用恢復本（有 `bible.db` 時），沒有恢復本時自動改用和合本；也可用 `--source cuv|recovery` 明確指定，聖經模組可用 `--module 代號` 或 `--strongbible 路徑` 指定（見「多個聖經模組」）。
 
 列出書卷：
 

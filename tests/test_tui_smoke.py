@@ -80,6 +80,15 @@ class TuiSmokeTests(fixtures.TempCase):
         self.assertEqual(code, 0, out[-400:])
         self.assertIn("創世記", out)
 
+    def test_moduleCommandSwitchesAndPersists(self):
+        os.makedirs(self.dataDir)
+        fixtures.makeCuvModule(os.path.join(self.dataDir, "cuvt.bbl.mybible"))
+        fixtures.makeGbfModule(os.path.join(self.dataDir, "eng.bbl.mybible"), "Eng/T")
+        code, out = self.drive([], b":module eng\rQ", "創世記")
+        self.assertEqual(code, 0, out[-400:])
+        with open(os.path.join(self.dataDir, "config.json"), encoding="utf-8") as f:
+            self.assertIn('"eng"', f.read())
+
 
 if __name__ == "__main__":
     unittest.main()

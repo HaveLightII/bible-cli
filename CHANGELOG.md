@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+### 新增
+
+- 多聖經模組：新增 `bible data list`（列出已安裝資料庫與使用中的項目）、`bible data use <代號>`（設定預設聖經模組或字典，寫入 `config.json`）、`bible data uninstall <代號>`（只移除使用者資料目錄內的檔案）；`list`、`read`、`search`、`orig` 新增 `--module`，`bible --module` 可指定 TUI 的聖經模組。
+- TUI 新增 `:module`（別名 `:mod`）：列出模組、切換模組並記為預設；Strong 畫面標題顯示目前模組。
+- `bible data install` 可直接安裝 `.zip`（內含多個 `.mybible` 時各自安裝），`--from-dir` 改為收錄資料夾內所有 `bible.db`、`*.bbl.mybible`、`*.dct.mybible`；`.bbl.mybible` 內容不是聖經模組、`.dct.mybible` 不是字典時拒絕。
+- 其他 MySword 模組的顯示：去除 GBF 格式標記（標題、譯註、斜體、串珠、形態標記、HTML 標籤與實體），搜尋改為不分大小寫並合併空白；`orig` 對不含 Strong 的模組印出說明並以離開碼 1 結束。
+- 沒有設定預設時，有 `cuvt.bbl.mybible` 就用它，不再因為安裝其他模組而改變預設。
+
+### 變更
+
+- 優先序新增 `config.json` 的預設模組：位於環境變數之後、TUI 設定畫面的路徑之前。
+
 ### 修正
 
 - Windows：驗證資料檔失敗時 SQLite 連線未關閉，導致 `bible data install` 解壓縮後的 `.part` 暫存檔無法刪除；改以 `contextlib.closing` 確保連線關閉（`resources.py`、`install.py`、`cli.py`）。

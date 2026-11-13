@@ -27,7 +27,16 @@ from .constants import (
     reset,
     zhLangs,
 )
-from .install import findInDir, installOne
+from .config import getDefaultId, setDefaultId
+from .install import findInstallable, installMany
+from .modules import (
+    ModuleLookupError,
+    connHasStrong,
+    describe,
+    findModule,
+    kindLabels,
+    scanModules,
+)
 from .paths import launchCommand, userDataDir
 from .render import (
     insertFootnoteMarkers,
@@ -41,7 +50,7 @@ from .resources import (
 )
 from .sources.cuv import (
     CuvSource,
-    strongTagPattern,
+    plainText,
 )
 from .sources.recovery import (
     RecoverySource,
@@ -83,16 +92,17 @@ def cmdData(args, _conn):
     notePath = resolveNoteDbPath()
     print(f"筆記資料庫: {notePath or '（未啟用）'}")
     print(f"預設筆記資料庫位置: {noteDbDefaultPath}")
+    print(f"已安裝資料庫請用 `{launchCommand()} data list` 查看。")
 
 
 def cmdDataInstall(args, _conn):
     sources = list(args.fromFile or [])
     if args.fromDir:
-        found = findInDir(args.fromDir)
+        found = findInstallable(args.fromDir)
         if not found:
             sys.stderr.write(
                 f"{args.fromDir}: 找不到可安裝的檔案"
-                "（cuvt.bbl.mybible、strong_lite.dct.mybible、bible.db，.gz 壓縮檔亦可）\n"
+                "（bible.db、*.bbl.mybible、*.dct.mybible，.gz 與 .zip 壓縮檔亦可）\n"
             )
             sys.exit(2)
         sources.extend(found)
@@ -101,14 +111,119 @@ def cmdDataInstall(args, _conn):
         sys.exit(2)
     destDir = userDataDir()
     failed = 0
+    installed = 0
     for src in sources:
-        status, message = installOne(src, destDir, force=args.force)
-        if status == "error":
-            failed += 1
-            sys.stderr.write(message + "\n")
-        else:
-            print(message)
+        for status, message in installMany(src, destDir, force=args.force):
+            if status == "error":
+                failed += 1
+                sys.stderr.write(message + "\n")
+            else:
+                installed += status == "installed"
+                print(message)
     print(f"安裝目錄: {destDir}")
+    if installed:
+        print(
+            f"可用 `{launchCommand()} data list` 查看已安裝的資料庫，"
+            f"用 `{launchCommand()} data use <代號>` 切換預設聖經模組。"
+        )
+    if failed:
+        sys.exit(1)
+
+
+def _realpath(path):
+    return os.path.realpath(path) if path else None
+
+
+def cmdDataList(args, _conn):
+    infos = scanModules()
+    resources = resolveResources(args, _loadStoredSettingsDict())
+    active = {
+        _realpath(resources.get(k)) for k in ("db", "strongBible", "dict")
+        if resources.get(k) and os.path.isfile(resources[k])
+    }
+    print(f"使用者資料目錄: {userDataDir()}")
+    for kind in ("bible", "dict", "recovery"):
+        print(f"\n{kindLabels[kind]}:")
+        group = [m for m in infos if m.kind == kind]
+        if not group:
+            print("  （無）")
+        for m in group:
+            mark = "*" if _realpath(m.path) in active else " "
+            abbr = f"［{m.abbr}］" if m.abbr and kind != "recovery" else ""
+            desc = m.description if len(m.description) <= 48 else m.description[:47] + "…"
+            print(f"{mark} {m.id} {abbr}{desc}")
+            print(f"    {describe(m)}")
+    print("\n* 為目前使用中的資料庫。")
+    print(f"切換預設聖經模組: {launchCommand()} data use <代號>")
+    print(f"臨時指定: {launchCommand()} read 創 1:1 --module <代號>")
+
+
+def cmdDataUse(args, _conn):
+    if args.reset:
+        setDefaultId("bible", None)
+        setDefaultId("dict", None)
+        print("已清除預設資料庫設定，改回自動選擇（有 cuvt 時用 cuvt，否則依檔名排序第一個）。")
+        return
+    if not args.id:
+        sys.stderr.write("請指定資料庫代號（見 data list），或用 --reset 清除預設。\n")
+        sys.exit(2)
+    try:
+        m = findModule(args.id, scanModules(), kinds=("bible", "dict"))
+    except ModuleLookupError as e:
+        sys.stderr.write(f"{e}\n")
+        sys.exit(1)
+    setDefaultId(m.kind, m.id)
+    print(f"已將預設{kindLabels[m.kind]}設為 {m.id}")
+    if not m.managed:
+        print(f"注意：此檔位於使用者資料目錄之外（{m.path}），換個目錄執行時可能找不到。")
+    key = "strongBible" if m.kind == "bible" else "dict"
+    now = resolveResources(None, _loadStoredSettingsDict()).get(key)
+    if _realpath(now) != _realpath(m.path):
+        print(
+            "注意：目前仍被環境變數（BIBLE_STRONG_BIBLE／BIBLE_STRONG_DICT）蓋過，"
+            f"實際使用: {now or '（無）'}"
+        )
+
+
+def cmdDataUninstall(args, _conn):
+    infos = scanModules()
+    failed = 0
+    for query in args.ids:
+        try:
+            m = findModule(query, infos)
+        except ModuleLookupError as e:
+            sys.stderr.write(f"{e}\n")
+            failed += 1
+            continue
+        if not m.managed:
+            sys.stderr.write(
+                f"{m.id}: 位於使用者資料目錄之外（{m.path}），不由本指令移除，請自行刪除。\n"
+            )
+            failed += 1
+            continue
+        if not args.yes:
+            if not sys.stdin.isatty():
+                sys.stderr.write(f"{m.id}: 非互動環境需加 --yes 才會移除。\n")
+                failed += 1
+                continue
+            try:
+                answer = input(f"移除{kindLabels[m.kind]}「{m.id}」（{m.path}）？[y/N] ")
+            except EOFError:
+                answer = ""
+            if answer.strip().lower() not in ("y", "yes"):
+                print(f"{m.id}: 已略過")
+                continue
+        try:
+            os.remove(m.path)
+        except OSError as e:
+            sys.stderr.write(f"{m.id}: 移除失敗: {e}\n")
+            failed += 1
+            continue
+        if m.kind in ("bible", "dict"):
+            current = getDefaultId(m.kind)
+            if current and current.lower() == m.id.lower():
+                setDefaultId(m.kind, None)
+        print(f"已移除 {m.id}")
     if failed:
         sys.exit(1)
 
@@ -168,6 +283,12 @@ def cmdOrig(args, _conn):
         sys.exit(1)
 
     bconn = connectStrongBible(args.strongbible)
+    if not connHasStrong(bconn):
+        sys.stderr.write(
+            "此模組不含 Strong 編號，無法顯示原文對照；"
+            f"請改用含 Strong 的模組（見 `{launchCommand()} data list`）。\n"
+        )
+        sys.exit(1)
     rows = CuvSource(bconn).chapterRows(bookIndex, chapter)
     if not rows:
         sys.stderr.write("查無此章節\n")
@@ -256,7 +377,8 @@ def cmdSearch(args, conn):
     if cuv:
         results = CuvSource(conn).search([args.query])
         queryPattern = re.compile(
-            "\u3000?".join(re.escape(ch) for ch in args.query.replace("\u3000", ""))
+            "\u3000?".join(re.escape(ch) for ch in args.query.replace("\u3000", "")),
+            re.IGNORECASE,
         ) if args.query.replace("\u3000", "") else None
     else:
         results = RecoverySource(conn).search(args.lang or "big5", [args.query])
@@ -329,7 +451,7 @@ def renderCuvChapter(conn, bookIndex, chapter, sectionFilter, color):
         verse = r["Verse"]
         if sectionFilter and verse != sectionFilter:
             continue
-        text = strongTagPattern.sub("", r["Scripture"])
+        text = plainText(r["Scripture"] or "")
         label = f"{dim}{verse:>3}{reset}" if color else f"{verse:>3}"
         print(f"{label}  {text}")
         print()
@@ -389,6 +511,10 @@ def buildParser():
     )
     p.add_argument("--db", default=None, help="sqlite 資料庫路徑")
     p.add_argument(
+        "--module", dest="moduleTop", default=None, metavar="代號",
+        help="指定要使用的聖經模組（見 data list）；不帶子指令時直接以該模組啟動 TUI",
+    )
+    p.add_argument(
         "--mode", choices=["auto", "recovery", "strong"], default="auto",
         type=normalizeModeName,
         help="不帶子指令時要啟動的介面："
@@ -403,8 +529,12 @@ def buildParser():
     sourceParent = argparse.ArgumentParser(add_help=False)
     sourceParent.add_argument(
         "--source", choices=["cuv", "recovery"], default=None,
-        help="資料來源：cuv=和合本、recovery=恢復本；"
-             "未指定時有恢復本就用恢復本，否則用和合本",
+        help="資料來源：cuv=聖經模組（預設和合本，可用 --module 指定）、recovery=恢復本；"
+             "未指定時有恢復本就用恢復本，否則用聖經模組",
+    )
+    sourceParent.add_argument(
+        "--module", "-m", default=None, metavar="代號",
+        help="使用指定的聖經模組（代號見 data list），等同 --source cuv 並指定模組",
     )
     sourceParent.add_argument(
         "--strongbible", default=None,
@@ -464,6 +594,10 @@ def buildParser():
              "（預設讀環境變數 BIBLE_STRONG_BIBLE）",
     )
     pOrig.add_argument(
+        "--module", "-m", default=None, metavar="代號",
+        help="使用指定的聖經模組（需含 Strong 編號；代號見 data list）",
+    )
+    pOrig.add_argument(
         "--dict", default=None,
         help="配合 --word 查字義用，Strong 字典 .dct.mybible 路徑"
              "（預設讀環境變數 BIBLE_STRONG_DICT）",
@@ -482,16 +616,31 @@ def buildParser():
     )
     pInstall.add_argument(
         "--from-dir", dest="fromDir", default=None,
-        help="含 cuvt.bbl.mybible、strong_lite.dct.mybible、bible.db 的資料夾（.gz 壓縮檔可直接使用）",
+        help="含 bible.db、*.bbl.mybible、*.dct.mybible 的資料夾（.gz、.zip 壓縮檔可直接使用）",
     )
     pInstall.add_argument(
         "--from-file", dest="fromFile", action="append", default=[],
-        help="單一資料檔路徑（可為 .gz），可重複指定",
+        help="單一資料檔路徑（可為 .gz 或含 .mybible 的 .zip），可重複指定",
     )
     pInstall.add_argument(
         "--force", action="store_true", help="目標已存在且內容不同時仍覆蓋",
     )
     pInstall.set_defaults(func=cmdDataInstall)
+
+    pDataList = dataSub.add_parser("list", aliases=["ls"], help="列出已安裝的資料庫與目前使用中的項目")
+    pDataList.set_defaults(func=cmdDataList)
+
+    pDataUse = dataSub.add_parser("use", help="設定預設的聖經模組或字典")
+    pDataUse.add_argument("id", nargs="?", default=None, help="資料庫代號（見 data list）")
+    pDataUse.add_argument("--reset", action="store_true", help="清除預設，改回自動選擇")
+    pDataUse.set_defaults(func=cmdDataUse)
+
+    pDataRm = dataSub.add_parser(
+        "uninstall", aliases=["rm"], help="移除使用者資料目錄內的資料庫"
+    )
+    pDataRm.add_argument("ids", nargs="+", metavar="id", help="資料庫代號（見 data list）")
+    pDataRm.add_argument("-y", "--yes", action="store_true", help="不詢問直接移除")
+    pDataRm.set_defaults(func=cmdDataUninstall)
 
     return p
 
@@ -606,10 +755,31 @@ def launchInteractive(args, resources):
     )
 
 
+def applyModuleOption(args):
+    query = getattr(args, "module", None) or getattr(args, "moduleTop", None)
+    if not query:
+        return
+    if getattr(args, "source", None) == "recovery":
+        sys.stderr.write("--module 不能與 --source recovery 並用。\n")
+        sys.exit(2)
+    try:
+        info = findModule(query, scanModules(), kinds=("bible",))
+    except ModuleLookupError as e:
+        sys.stderr.write(f"{e}\n")
+        sys.exit(1)
+    args.strongbible = info.path
+    if hasattr(args, "source") and args.source is None:
+        args.source = "cuv"
+    if getattr(args, "cmd", None) is None and args.mode == "auto":
+        args.mode = "strong"
+
+
 def main():
     setupConsole()
     parser = buildParser()
     args = parser.parse_args()
+    if getattr(args, "cmd", None) in (None, "list", "read", "search", "orig"):
+        applyModuleOption(args)
 
     resources = resolveResources(args, _loadStoredSettingsDict())
     args.db = resources["db"]
