@@ -141,7 +141,7 @@
 
 ## 版本
 
-目前版本：0.1.0（`bible --version`），變更內容見 [CHANGELOG.md](https://github.com/HaveLightII/bible-cli/blob/main/CHANGELOG.md)。
+目前版本：0.1.1（`bible --version`），變更內容見 [CHANGELOG.md](https://github.com/HaveLightII/bible-cli/blob/main/CHANGELOG.md)。
 
 ## 資料目錄與偵測順序
 

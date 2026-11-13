@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-13
+
 ### 新增
 
 - 多聖經模組：新增 `bible data list`（列出已安裝資料庫與使用中的項目）、`bible data use <代號>`（設定預設聖經模組或字典，寫入 `config.json`）、`bible data uninstall <代號>`（只移除使用者資料目錄內的檔案）；`list`、`read`、`search`、`orig` 新增 `--module`，`bible --module` 可指定 TUI 的聖經模組。
