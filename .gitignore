@@ -3,6 +3,7 @@
 *.db.[0-9][0-9][0-9]
 *.tar.gz
 *.mybible
+*.mybible.gz
 .bible-note.db.path
 
 # Python

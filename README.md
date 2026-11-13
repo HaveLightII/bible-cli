@@ -10,7 +10,7 @@
 - 恢復本經文瀏覽：書卷／章／節查詢，含大綱、註解、英文對照、和合本正文切換
 - 和合本經文瀏覽與全文搜尋：不需要恢復本，CLI 以 `--source cuv|recovery` 選擇資料來源
 - 原文 Strong 編號對照：逐字標色顯示 Strong 編號，可查希臘文／希伯來文字義
-- 恢復本與原文 Strong 畫面可在 TUI 中以 `s` / `r` 即時切換，兩邊瀏覽狀態互不干擾
+- 恢復本與原文 Strong 畫面可在 TUI 中以 `s` / `r` 即時切換，兩邊瀏覽狀態互不干擾；在 Strong 畫面再按 `s` 可依序輪替已安裝的聖經模組
 - 全文搜尋：支援多字串交集查詢、`--exclude` 差集查詢
 - 類 vim 的 `:` 指令模式，可直接輸入 `:創世記 1 1` 之類的參照跳轉
 - 滑鼠／觸控支援：點擊書卷、章節、經文展開註解、原文標色字查字義
@@ -64,6 +64,7 @@
 
 - 不會連網；`.mybible` 檔會檢查資料表結構（和合本須含 `Bible` 表、Strong 字典須含 `dictionary` 表，`bible.db` 須含 `content`、`book_name`），SHA-256 與作者版本不同時只顯示警告
 - 可直接安裝 `.gz` 與 `.zip` 壓縮檔（MySword 網站兩種都有）；`.zip` 內每個 `.mybible` 檔各自安裝，只取檔名，不依壓縮檔內的路徑建立資料夾；都會先解壓縮到 `.part` 再驗證
+- 檔名是 `.gz` 但內容其實已是未壓縮的 SQLite 時（有些瀏覽器下載時會自動解壓縮卻保留 `.gz` 檔名），會直接當成 `.mybible` 安裝
 - `.bbl.mybible` 內容必須是聖經模組、`.dct.mybible` 必須是字典，否則拒絕
 - 檔名比對忽略大小寫，並把底線視為點（雲端硬碟下載時常把 `cuvt.bbl.mybible` 改成 `cuvt_bbl.mybible`，安裝後會還原為正確檔名）
 - 目標已有相同內容的檔案時略過；內容不同時需加 `--force` 才會覆蓋
@@ -119,10 +120,10 @@
 
 說明：
 
-- 沒有設定預設時，有 `cuvt` 就用 `cuvt`，否則取檔名排序第一個；安裝新模組不會改變預設
+- 沒有設定預設時，有 `cuvt` 就用 `cuvt`（不論它在哪個搜尋目錄），否則取檔名排序第一個；安裝新模組不會改變預設
 - `uninstall` 只移除使用者資料目錄內的檔案；位於目前目錄或原始碼目錄的檔案會拒絕並印出路徑，請自行刪除。`recovery` 代表恢復本 `bible.db`
 - 代號同時對應聖經模組與字典時，加 `.bbl` 或 `.dct` 區分（如 `eng.bbl`）
-- TUI 的原文 Strong 畫面使用目前的聖經模組：輸入 `:module` 列出模組，`:module kjv` 切換並記為預設
+- TUI 的原文 Strong 畫面使用目前的聖經模組：輸入 `:module` 列出模組，`:module kjv` 切換並記為預設；在 Strong 畫面按 `s` 依序輪替已安裝的模組，只影響本次執行，不改變預設
 - 字典也可用 `data use` 切換預設
 - 命令列參數與環境變數（`BIBLE_STRONG_BIBLE`、`BIBLE_STRONG_DICT`）優先於 `data use` 的預設；`data use` 的預設則優先於 TUI 設定畫面中的 `strong_db_path`、`dict_db_path`
 
@@ -136,7 +137,7 @@
 - 只有 `Strong` 欄位為 1（或經文內含 Strong 標記）的模組可用 `orig`、可在 TUI 點字查字義
 - 逐字對照（interlinear，含 `<Q>`、`<E>` 等區塊標記）的模組只去標記，各層文字會串在一起，未做版面處理
 - 搜尋會一次載入整個模組；數百 MB 的模組（如 BHSE、OHB）會很慢、很吃記憶體
-- 只測過 `Cuv/T` 與測試用的虛構模組；MySword 網站上的其他模組未逐一實測
+- 實測過 `Cuv/T`、`CUV/C`（文理和合本，不含 Strong）與測試用的虛構模組；MySword 網站上的其他模組未逐一實測
 - 商業或有版權的模組，授權由使用者自行確認
 
 ## 版本
@@ -181,21 +182,32 @@
 
 ## Installation
 
-建議以 `uv tool` 從 GitHub 安裝，會建立 `bible` 指令：
+建議以 `uv tool` 從 PyPI 安裝，會建立 `bible` 指令。發行套件名為 `bible-strong-tui`（安裝後指令為 `bible`，程式匯入名稱為 `bibletui`）：
 
 ```bash
-  uv tool install git+https://github.com/HaveLightII/bible-cli
+  uv tool install bible-strong-tui
 ```
 
 更新到最新版：
 
 ```bash
-  uv tool install --reinstall git+https://github.com/HaveLightII/bible-cli
+  uv tool upgrade bible-strong-tui
 ```
 
-發行於 PyPI 的套件名為 `bible-strong-tui`（安裝後指令仍為 `bible`，程式匯入名稱為 `bibletui`）；PyPI 安裝尚待首次發布後實測，目前請以上述 GitHub 方式安裝。
+也可用 `pipx` 或 `pip`：
 
-`pipx install git+https://github.com/HaveLightII/bible-cli` 理論上同樣可行，但作者尚未實測。已在 Android Termux 實測 `uv tool`；macOS 與 Windows 尚未實測。
+```bash
+  pipx install bible-strong-tui
+  python3 -m pip install bible-strong-tui
+```
+
+要安裝尚未發布的開發版，可直接從 GitHub 安裝：
+
+```bash
+  uv tool install git+https://github.com/HaveLightII/bible-cli
+```
+
+實測情形：PyPI 上的 0.2.0 已在 macOS 以 `uvx --from bible-strong-tui bible` 實測可執行；從 GitHub 以 `uv tool install` 安裝已在 Android Termux 實測。`pipx` 尚未實測。
 
 從原始碼執行（不安裝）：
 
