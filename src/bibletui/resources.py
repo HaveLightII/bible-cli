@@ -63,6 +63,10 @@ def detectResources(baseDir=None):
     return resources
 
 
+def _isPreferredBible(path):
+    return bool(path) and os.path.basename(path).lower() == preferredBibleFile
+
+
 def resourceSearchDirs():
     dirs = []
     for d in (userDataDir(), scriptDir, os.getcwd()):
@@ -94,6 +98,8 @@ def resolveResources(args=None, settings=None):
     found = {"db": None, "dict": None, "strongBible": None}
     for d in resourceSearchDirs():
         extra = detectResources(d)
+        if _isPreferredBible(extra["strongBible"]) and not _isPreferredBible(found["strongBible"]):
+            found["strongBible"] = extra["strongBible"]
         found = {k: found[k] or extra[k] for k in found}
     argDb = getattr(args, "db", None)
     argDict = getattr(args, "dict", None)

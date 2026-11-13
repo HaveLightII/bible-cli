@@ -117,6 +117,14 @@ class InstallUnitTests(fixtures.TempCase):
                 c.execute("SELECT 1")
         os.remove(junk)
 
+    def test_gzNameWithPlainSqliteContent(self):
+        src = os.path.join(self.files, "my.bbl.mybible.gz")
+        makeDb(src, ["Bible"])
+        status, msg = ins.installOne(src, self.dest)
+        self.assertEqual(status, "installed", msg)
+        self.assertEqual(os.listdir(self.dest), ["my.bbl.mybible"])
+        self.assertEqual(ins.installOne(src, self.dest)[0], "skipped")
+
     def test_gzCustomModuleKeepsName(self):
         custom = os.path.join(self.files, "my.bbl.mybible")
         makeDb(custom, ["Bible"])

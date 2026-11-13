@@ -234,6 +234,13 @@ class DefaultSelectionTests(fixtures.TempCase):
         p = self.run_(["read", "創", "1:1", "--no-color"])
         self.assertIn("甲乙丙", p.stdout)
 
+    def test_preferCuvtAcrossSearchDirs(self):
+        os.makedirs(self.dataDir)
+        fixtures.makeGbfModule(os.path.join(self.dataDir, "asv.bbl.mybible"), "ASV")
+        fixtures.makeCuvModule(os.path.join(self.work, "cuvt.bbl.mybible"))
+        p = self.run_(["read", "創", "1:1", "--no-color"])
+        self.assertIn("甲乙丙", p.stdout)
+
     def test_moduleIdFromFile(self):
         self.assertEqual(modules.moduleIdFromFile("cuvt.bbl.mybible"), "cuvt")
         self.assertEqual(modules.moduleIdFromFile("Strong_Lite.DCT.mybible"), "Strong_Lite")

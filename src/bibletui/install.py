@@ -105,6 +105,15 @@ def findInstallable(dirPath):
     return found
 
 
+def isPlainSqlite(path):
+    # 瀏覽器下載時可能已自動解壓縮，檔名卻仍是 .gz
+    try:
+        with open(path, "rb") as f:
+            return f.read(16) == b"SQLite format 3\x00"
+    except OSError:
+        return False
+
+
 def removeQuietly(path):
     try:
         os.remove(path)
@@ -186,7 +195,7 @@ def installOne(srcPath, destDir, force=False):
             return results[0]
         return "error", f"{srcPath}: 內含多個模組，請改用 installMany"
     name = stripGz(os.path.basename(srcPath))
-    gz = name != os.path.basename(srcPath)
+    gz = name != os.path.basename(srcPath) and not isPlainSqlite(srcPath)
     known = matchKnownName(name)
     if known:
         destName = known

@@ -10,7 +10,8 @@
 - TUI 新增 `:module`（別名 `:mod`）：列出模組、切換模組並記為預設；Strong 畫面標題顯示目前模組。
 - `bible data install` 可直接安裝 `.zip`（內含多個 `.mybible` 時各自安裝），`--from-dir` 改為收錄資料夾內所有 `bible.db`、`*.bbl.mybible`、`*.dct.mybible`；`.bbl.mybible` 內容不是聖經模組、`.dct.mybible` 不是字典時拒絕。
 - 其他 MySword 模組的顯示：去除 GBF 格式標記（標題、譯註、斜體、串珠、形態標記、HTML 標籤與實體），搜尋改為不分大小寫並合併空白；`orig` 對不含 Strong 的模組印出說明並以離開碼 1 結束。
-- 沒有設定預設時，有 `cuvt.bbl.mybible` 就用它，不再因為安裝其他模組而改變預設。
+- 沒有設定預設時，有 `cuvt.bbl.mybible` 就用它，不再因為安裝其他模組而改變預設（`cuvt.bbl.mybible` 與其他模組位於不同搜尋目錄時亦同）。
+- `bible data install`：檔名為 `.gz` 但內容其實是未壓縮的 SQLite 時（例如瀏覽器下載時已自動解壓縮），直接當成 `.mybible` 安裝。
 
 ### 變更
 
