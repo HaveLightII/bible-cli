@@ -231,9 +231,12 @@ class KeyMixin:
             return True
 
         if not self._isTypingText():
-            if ch in (ord("s"), ord("S")) and self.hasStrongBible and not self.mode.startswith("strong"):
-                self._pushHistory()
-                self.mode = "strong_books"
+            if ch in (ord("s"), ord("S")) and self.hasStrongBible:
+                if self.mode.startswith("strong"):
+                    self._cycleStrongModule()
+                else:
+                    self._pushHistory()
+                    self.mode = "strong_books"
                 return True
             if ch in (ord("r"), ord("R")) and self.hasDb and self.mode.startswith("strong"):
                 self._pushHistory()

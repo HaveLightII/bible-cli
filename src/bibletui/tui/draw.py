@@ -477,7 +477,7 @@ class DrawMixin:
         lines.append("  q   離開程式（詢問 y/n）　　Q   直接離開程式")
         lines.append("  :   進入指令模式（類似 vim），可輸入以下指令")
         if self.hasStrongBible:
-            lines.append("  s   快速切換到原文 Strong 畫面")
+            lines.append("  s   快速切換到原文 Strong 畫面；已在該畫面時輪替已安裝的聖經模組")
         if self.hasDb:
             lines.append("  r   快速切回恢復本畫面")
         if self.storageEnabled:

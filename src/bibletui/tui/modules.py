@@ -35,7 +35,17 @@ class ModuleMixin:
             return
         self._switchStrongModule(info)
 
-    def _switchStrongModule(self, info):
+    def _cycleStrongModule(self):
+        infos = [m for m in scanModules() if m.kind == "bible"]
+        if len(infos) < 2:
+            self.statusMessage = "沒有其他聖經模組可切換（見 bible data install）"
+            return
+        current = self._currentModuleId()
+        paths = [os.path.realpath(m.path) for m in infos]
+        idx = paths.index(current) if current in paths else -1
+        self._switchStrongModule(infos[(idx + 1) % len(infos)], persist=False)
+
+    def _switchStrongModule(self, info, persist=True):
         if self.strongConn is not None:
             try:
                 self.strongConn.close()
@@ -73,9 +83,11 @@ class ModuleMixin:
             self.searchIdx = 0
             if self.mode in ("search_input", "search_results"):
                 self.mode = "strong_books"
-        try:
-            setDefaultId("bible", info.id)
-            saved = "，已記為預設"
-        except OSError:
-            saved = "（無法寫入設定檔，僅本次有效）"
+        saved = ""
+        if persist:
+            try:
+                setDefaultId("bible", info.id)
+                saved = "，已記為預設"
+            except OSError:
+                saved = "（無法寫入設定檔，僅本次有效）"
         self.statusMessage = f"已切換聖經模組：{self.strongModuleLabel}{saved}"

@@ -89,6 +89,15 @@ class TuiSmokeTests(fixtures.TempCase):
         with open(os.path.join(self.dataDir, "config.json"), encoding="utf-8") as f:
             self.assertIn('"eng"', f.read())
 
+    def test_sKeyCyclesModulesWithoutPersisting(self):
+        os.makedirs(self.dataDir)
+        fixtures.makeCuvModule(os.path.join(self.dataDir, "cuvt.bbl.mybible"))
+        fixtures.makeGbfModule(os.path.join(self.dataDir, "eng.bbl.mybible"), "Eng/T")
+        code, out = self.drive([], b"sQ", "創世記")
+        self.assertEqual(code, 0, out[-400:])
+        self.assertIn("Eng/T", out)
+        self.assertFalse(os.path.exists(os.path.join(self.dataDir, "config.json")))
+
 
 if __name__ == "__main__":
     unittest.main()
